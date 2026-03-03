@@ -1,9 +1,13 @@
 """
 handlers.py — All Telegram command and callback handlers.
+
+Fixes applied:
+  - /watch and approval now call seed_seen_for_chat() to pre-populate
+    dedup tables with current items, preventing backlog spam on first run.
+  - All fetch calls are properly awaited (dart + news are async).
 """
 
 import logging
-import os
 
 from telegram import Update
 from telegram.constants import ParseMode
@@ -48,6 +52,38 @@ def _main_prompt(lang: str) -> str:
     return "메뉴를 선택하세요:" if lang == "ko" else "Select a menu:"
 
 
+# ── Seeding helper — call after any new subscription ──────────────────────────
+
+async def _seed_dedup_tables():
+    """
+    Fetch current top items for all companies and mark them as seen
+    WITHOUT sending alerts. Prevents backlog spam after a fresh subscribe.
+    Errors are swallowed — seeding is best-effort.
+    """
+    log.info("Seeding dedup tables for new subscription…")
+    news_by_company: dict[str, list[dict]] = {}
+    disc_by_company: dict[str, list[dict]] = {}
+
+    for company in _ALL_COMPANIES:
+        try:
+            items = await get_news(company, limit=10)
+            news_by_company[company] = items
+        except Exception as e:
+            log.warning("Seed news fetch failed for %s: %s", company, e)
+            news_by_company[company] = []
+
+    for company in _DART_COMPANIES:
+        try:
+            items = await get_disclosures(company, limit=10)
+            disc_by_company[company] = [it for it in items if "error" not in it]
+        except Exception as e:
+            log.warning("Seed disc fetch failed for %s: %s", company, e)
+            disc_by_company[company] = []
+
+    db.seed_seen_for_chat(news_by_company, disc_by_company)
+    log.info("Dedup seeding complete.")
+
+
 # ── /start — approval gate ─────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -55,7 +91,6 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     db.log_event("start", user.id, user.username, chat_id)
 
-    # Admin always has access
     if _is_admin(user.id):
         db.approve_chat(chat_id)
         await _show_language_prompt(update)
@@ -65,18 +100,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await _show_language_prompt(update)
         return
 
-    # Not yet approved — create pending record and notify admin
     db.request_access(chat_id)
-
-    # Tell user
     await update.message.reply_text(
         "🔒 Access restricted. Your request has been sent to the administrator.",
         parse_mode=ParseMode.HTML,
     )
 
-    # Notify admin
-    username = f"@{user.username}" if user.username else f"id:{user.id}"
-    name     = user.full_name or ""
+    username  = f"@{user.username}" if user.username else f"id:{user.id}"
+    name      = user.full_name or ""
     admin_msg = (
         f"🔐 <b>Access Request</b>\n\n"
         f"User: {username} ({name})\n"
@@ -144,12 +175,15 @@ async def cmd_watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     args = ctx.args or []
     arg  = args[0].lower() if args else ""
-
     db.log_event("watch", user.id, user.username, chat_id, arg or "menu")
+
+    is_first = not db.has_any_subscription(chat_id)
 
     if arg in ("news", "기사"):
         for company in _ALL_COMPANIES:
             db.subscribe(chat_id, company, "news")
+        if is_first:
+            await _seed_dedup_tables()
         msg = (
             "기사 알림이 모든 회사에 대해 활성화되었습니다. ✅"
             if lang == "ko" else
@@ -160,6 +194,8 @@ async def cmd_watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif arg in ("disclosures", "disclosure", "공시"):
         for company in _DART_COMPANIES:
             db.subscribe(chat_id, company, "disclosures")
+        if is_first:
+            await _seed_dedup_tables()
         msg = (
             "공시 알림이 활성화되었습니다. ✅"
             if lang == "ko" else
@@ -168,7 +204,6 @@ async def cmd_watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
     else:
-        # No valid arg — show button menu
         prompt = "구독할 카테고리를 선택하세요:" if lang == "ko" else "Select what to subscribe to:"
         await update.message.reply_text(
             prompt,
@@ -185,24 +220,20 @@ async def cmd_unwatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lang    = db.get_lang(chat_id)
     args    = ctx.args or []
     arg     = args[0].lower() if args else ""
-
     db.log_event("unwatch", user.id, user.username, chat_id, arg or "menu")
 
     if arg in ("news", "기사"):
         db.unsubscribe(chat_id, category="news")
         msg = "기사 알림이 해제되었습니다. 🔕" if lang == "ko" else "Unsubscribed from <b>News</b> alerts. 🔕"
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
-
     elif arg in ("disclosures", "disclosure", "공시"):
         db.unsubscribe(chat_id, category="disclosures")
         msg = "공시 알림이 해제되었습니다. 🔕" if lang == "ko" else "Unsubscribed from <b>Disclosures</b> alerts. 🔕"
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
-
     elif arg in ("all", "전체"):
         db.unsubscribe(chat_id)
         msg = "모든 알림이 해제되었습니다. 🔕" if lang == "ko" else "Unsubscribed from all alerts. 🔕"
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
-
     else:
         prompt = "취소할 카테고리를 선택하세요:" if lang == "ko" else "Select what to unsubscribe from:"
         await update.message.reply_text(
@@ -224,7 +255,6 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg)
         return
 
-    # Group by company
     by_company: dict[str, list[str]] = {}
     for s in subs:
         by_company.setdefault(s["company"], []).append(s["category"])
@@ -233,7 +263,7 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for company in _ALL_COMPANIES:
         cats = by_company.get(company)
         if cats:
-            label = _company_label(company, lang)
+            label    = _company_label(company, lang)
             cats_str = ", ".join(sorted(cats))
             lines.append(f"✅ <b>{label}</b>: {cats_str}")
 
@@ -291,18 +321,26 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     lang    = db.get_lang(chat_id)
 
-    # ── Admin approval buttons ──────────────────────────────────────────
+    # ── Admin approval ──────────────────────────────────────────────────
     if data.startswith("approve:") or data.startswith("deny:"):
         if not _is_admin(user.id):
             return
-        action, target_id_str = data.split(":", 1)
-        target_id = int(target_id_str)
+        action, target_str = data.split(":", 1)
+        target_id = int(target_str)
+
         if action == "approve":
             db.approve_chat(target_id)
             db.subscribe_default(target_id)
-            await query.edit_message_text(f"✅ Approved chat <code>{target_id}</code>.", parse_mode=ParseMode.HTML)
+            await query.edit_message_text(
+                f"✅ Approved chat <code>{target_id}</code>.", parse_mode=ParseMode.HTML
+            )
+            # Seed dedup so the newly approved chat doesn't get spammed
             try:
-                tl = db.get_lang(target_id)
+                await _seed_dedup_tables()
+            except Exception as e:
+                log.warning("Seed failed after approval: %s", e)
+            try:
+                tl  = db.get_lang(target_id)
                 msg = (
                     "✅ 접근이 승인되었습니다. /start 를 눌러 시작하세요."
                     if tl == "ko" else
@@ -313,10 +351,12 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 log.warning("Could not notify approved user %d: %s", target_id, e)
         else:
             db.deny_chat(target_id)
-            await query.edit_message_text(f"❌ Denied chat <code>{target_id}</code>.", parse_mode=ParseMode.HTML)
+            await query.edit_message_text(
+                f"❌ Denied chat <code>{target_id}</code>.", parse_mode=ParseMode.HTML
+            )
         return
 
-    # ── Access gate for non-admin callbacks ─────────────────────────────
+    # ── Access gate ─────────────────────────────────────────────────────
     if not _is_admin(user.id) and not db.is_approved(chat_id):
         await query.edit_message_text("🔒 Access restricted.")
         return
@@ -345,34 +385,28 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif data == "nav:main":
         db.log_event("click", user.id, user.username, chat_id, data)
         await query.edit_message_text(
-            _main_prompt(lang),
-            reply_markup=kb_main(lang),
-            parse_mode=ParseMode.HTML,
+            _main_prompt(lang), reply_markup=kb_main(lang), parse_mode=ParseMode.HTML,
         )
 
     elif data.startswith("nav:back_to_cat:"):
         company = data.split(":")[2]
         db.log_event("click", user.id, user.username, chat_id, data)
-        label = _company_label(company, lang)
+        label  = _company_label(company, lang)
         prompt = (
             f"<b>{label}</b> 카테고리를 선택하세요:"
             if lang == "ko" else
             f"Select category for <b>{label}</b>:"
         )
         await query.edit_message_text(
-            prompt,
-            reply_markup=kb_category(lang, company),
-            parse_mode=ParseMode.HTML,
+            prompt, reply_markup=kb_category(lang, company), parse_mode=ParseMode.HTML,
         )
 
-    # ── Price menu ──────────────────────────────────────────────────────
+    # ── Price ────────────────────────────────────────────────────────────
     elif data == "menu:price":
         db.log_event("click", user.id, user.username, chat_id, data)
         prompt = "코인을 선택하세요:" if lang == "ko" else "Select a coin:"
         await query.edit_message_text(
-            prompt,
-            reply_markup=kb_price(lang),
-            parse_mode=ParseMode.HTML,
+            prompt, reply_markup=kb_price(lang), parse_mode=ParseMode.HTML,
         )
 
     elif data.startswith("price:"):
@@ -380,9 +414,8 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         db.log_event("click", user.id, user.username, chat_id, data)
         await query.edit_message_text("⏳ Fetching price…")
         result = await get_price(coin, lang)
-        text   = fmt_price(result, lang)
         await query.edit_message_text(
-            text,
+            fmt_price(result, lang),
             reply_markup=kb_after_price(lang),
             parse_mode=ParseMode.HTML,
         )
@@ -398,9 +431,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"Select category for <b>{label}</b>:"
         )
         await query.edit_message_text(
-            prompt,
-            reply_markup=kb_category(lang, company),
-            parse_mode=ParseMode.HTML,
+            prompt, reply_markup=kb_category(lang, company), parse_mode=ParseMode.HTML,
         )
 
     # ── Category selection ──────────────────────────────────────────────
@@ -429,12 +460,12 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             disable_web_page_preview=True,
         )
 
-    # ── Watch/unwatch via buttons ────────────────────────────────────────
+    # ── Watch via buttons ───────────────────────────────────────────────
     elif data.startswith("watch:"):
-        # format: watch:all:news  or  watch:all:disclosures  or  watch:all:all
         parts    = data.split(":")
         category = parts[2] if len(parts) > 2 else "all"
         db.log_event("click", user.id, user.username, chat_id, data)
+        is_first = not db.has_any_subscription(chat_id)
 
         if category == "all":
             db.subscribe_default(chat_id)
@@ -443,13 +474,18 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             for company in _ALL_COMPANIES:
                 db.subscribe(chat_id, company, "news")
             msg = "기사 알림이 활성화되었습니다. ✅" if lang == "ko" else "Subscribed to News alerts. ✅"
-        else:  # disclosures
+        else:
             for company in _DART_COMPANIES:
                 db.subscribe(chat_id, company, "disclosures")
             msg = "공시 알림이 활성화되었습니다. ✅" if lang == "ko" else "Subscribed to Disclosures alerts. ✅"
 
+        if is_first:
+            await query.edit_message_text("⏳ Setting up alerts…")
+            await _seed_dedup_tables()
+
         await query.edit_message_text(msg, parse_mode=ParseMode.HTML)
 
+    # ── Unwatch via buttons ─────────────────────────────────────────────
     elif data.startswith("unwatch:"):
         parts    = data.split(":")
         category = parts[2] if len(parts) > 2 else "all"
@@ -486,7 +522,7 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pending = ctx.user_data.get("pending_search")
     if pending:
         ctx.user_data.pop("pending_search")
-        company = pending["company"]
+        company  = pending["company"]
         db.log_event("search", user.id, user.username, chat_id, f"{company}|{text[:200]}")
         category = _detect_category(text, company) or "news"
         result   = await _fetch_text(company, category, lang)
@@ -525,9 +561,8 @@ async def _fetch_text(company: str, category: str, lang: str) -> str:
     if category == "disclosures" and company in _DART_COMPANIES:
         items = await get_disclosures(company)
         return fmt_disclosures(items, lang)
-    else:
-        items = await get_news(company)
-        return fmt_news(items, lang)
+    items = await get_news(company)
+    return fmt_news(items, lang)
 
 
 # ── NLP helpers ───────────────────────────────────────────────────────────────
