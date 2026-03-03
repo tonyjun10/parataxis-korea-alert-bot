@@ -1,5 +1,12 @@
 """
 main.py — Parataxis Korea Alert Bot entry point.
+
+FIX: Replaced APScheduler + lambda pattern with PTB's native JobQueue.
+The old pattern (lambda: app.create_task(run_monitor(app.bot))) was
+unreliable on Railway because the lambda was called synchronously
+by APScheduler before the Application event loop was fully running.
+
+PTB's JobQueue runs coroutines correctly inside the running event loop.
 """
 
 import logging
@@ -7,7 +14,7 @@ import os
 import sys
 from pathlib import Path
 
-# ── Logging ────────────────────────────────────────────────────────────────────
+# ── Logging — stdout first so Railway captures everything ─────────────────────
 Path("logs").mkdir(exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
@@ -19,23 +26,28 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ── Imports (after logging) ────────────────────────────────────────────────────
+# ── Imports (after logging config) ────────────────────────────────────────────
 from telegram.ext import (
     Application,
-    CommandHandler,
     CallbackQueryHandler,
+    CommandHandler,
     MessageHandler,
     filters,
 )
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import db
 from handlers import (
-    cmd_start, cmd_help, cmd_watch, cmd_unwatch, cmd_status,
-    cmd_audit, cmd_users,
-    callback_handler, message_handler,
+    callback_handler,
+    cmd_audit,
+    cmd_help,
+    cmd_start,
+    cmd_status,
+    cmd_unwatch,
+    cmd_users,
+    cmd_watch,
+    message_handler,
 )
-from scheduler import run_monitor
+from scheduler import register_jobs
 
 
 def main():
@@ -46,41 +58,33 @@ def main():
 
     dart_key = os.environ.get("DART_API_KEY", "")
     if not dart_key:
-        log.warning("DART_API_KEY is not set — DART disclosures will fail.")
+        log.warning("DART_API_KEY not set — DART disclosures will fail.")
 
     db.init_db()
+    log.info("Database ready.")
 
+    # Build application — JobQueue is enabled by default in PTB v20+
     app = Application.builder().token(token).build()
 
-    # Public commands
+    # ── Command handlers ───────────────────────────────────────────────────────
     app.add_handler(CommandHandler("start",   cmd_start))
     app.add_handler(CommandHandler("help",    cmd_help))
     app.add_handler(CommandHandler("watch",   cmd_watch))
     app.add_handler(CommandHandler("unwatch", cmd_unwatch))
     app.add_handler(CommandHandler("status",  cmd_status))
-
-    # Admin-only commands (permission checked inside handler)
     app.add_handler(CommandHandler("audit",   cmd_audit))
     app.add_handler(CommandHandler("users",   cmd_users))
 
-    # Callbacks (buttons)
+    # ── Callback (inline buttons) ──────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    # Free text / search
+    # ── Free text / search ─────────────────────────────────────────────────────
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
-    # ── Scheduler ──────────────────────────────────────────────────────────────
-    scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
-    scheduler.add_job(
-        lambda: app.create_task(run_monitor(app.bot)),
-        trigger="interval",
-        minutes=10,
-        id="monitor",
-    )
-    scheduler.start()
-    log.info("Scheduler started — monitor every 10 min.")
+    # ── Scheduler via PTB JobQueue (reliable on Railway) ──────────────────────
+    register_jobs(app, interval_minutes=10)
 
-    log.info("Bot starting in polling mode…")
+    log.info("Bot starting — polling mode.")
     app.run_polling(drop_pending_updates=True)
 
 
