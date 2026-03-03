@@ -1,12 +1,14 @@
 """
-dart.py — DART OpenAPI integration
+dart.py — DART OpenAPI integration.
+Blocking HTTP calls run in asyncio.to_thread() to avoid freezing the event loop.
 """
 
-import os
+import asyncio
 import io
-import zipfile
 import logging
+import os
 import xml.etree.ElementTree as ET
+import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -14,33 +16,29 @@ from zoneinfo import ZoneInfo
 import httpx
 
 log = logging.getLogger(__name__)
-SEOUL = ZoneInfo("Asia/Seoul")
+SEOUL        = ZoneInfo("Asia/Seoul")
 DART_API_KEY = os.environ.get("DART_API_KEY", "")
 
-# Local cache of corp_code list
 CORP_CODE_CACHE = Path("data/corp_codes.xml")
 
-# Manual overrides — update if auto-lookup keeps failing
 CORP_CODE_OVERRIDES: dict[str, str] = {
-    "bitmax":    "",   # fill in if known
+    "parataxis": "",  # fill in if known
+    "bitmax":    "",
     "bitplanet": "",
 }
 
-_corp_code_map: dict[str, str] = {}  # keyword_lower -> corp_code
+_corp_code_map: dict[str, str] = {}
 
-
-# ── Corp code lookup ───────────────────────────────────────────────────────────
 
 def _load_corp_codes():
     global _corp_code_map
     if not CORP_CODE_CACHE.exists():
         _download_corp_codes()
     if not CORP_CODE_CACHE.exists():
-        log.warning("Corp code cache missing — DART queries may fail.")
+        log.warning("Corp code cache missing.")
         return
     tree = ET.parse(CORP_CODE_CACHE)
-    root = tree.getroot()
-    for item in root.findall("list"):
+    for item in tree.getroot().findall("list"):
         code = (item.findtext("corp_code") or "").strip()
         name = (item.findtext("corp_name") or "").strip()
         if code and name:
@@ -50,31 +48,26 @@ def _load_corp_codes():
 
 def _download_corp_codes():
     url = "https://opendart.fss.or.kr/api/corpCode.xml"
-    params = {"crtfc_key": DART_API_KEY}
     try:
         CORP_CODE_CACHE.parent.mkdir(parents=True, exist_ok=True)
         with httpx.Client(timeout=30) as client:
-            r = client.get(url, params=params)
+            r = client.get(url, params={"crtfc_key": DART_API_KEY})
         r.raise_for_status()
         with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-            name = z.namelist()[0]
-            CORP_CODE_CACHE.write_bytes(z.read(name))
+            CORP_CODE_CACHE.write_bytes(z.read(z.namelist()[0]))
         log.info("Corp codes downloaded.")
     except Exception as e:
         log.error("Failed to download corp codes: %s", e)
 
 
 def get_corp_code(company_key: str) -> str:
-    """Return DART corp_code for company keyword."""
-    # 1. Check manual overrides
     override = CORP_CODE_OVERRIDES.get(company_key.lower(), "")
     if override:
         return override
-    # 2. Ensure cache loaded
     if not _corp_code_map:
         _load_corp_codes()
-    # 3. Search by keyword
     keywords = {
+        "parataxis": ["파라택시스", "parataxis"],
         "bitmax":    ["비트맥스", "bitmax"],
         "bitplanet": ["비트플래닛", "bitplanet"],
     }
@@ -86,26 +79,22 @@ def get_corp_code(company_key: str) -> str:
     return ""
 
 
-# ── Disclosure fetch ───────────────────────────────────────────────────────────
-
 def _fmt_date(dt_str: str) -> str:
-    """20240101 -> 2024-01-01"""
     try:
         return datetime.strptime(dt_str, "%Y%m%d").strftime("%Y-%m-%d")
     except Exception:
         return dt_str
 
 
-def get_disclosures(company_key: str, limit: int = 5) -> list[dict]:
+def _get_disclosures_sync(company_key: str, limit: int = 5) -> list[dict]:
     corp_code = get_corp_code(company_key)
     if not corp_code:
         return [{"error": f"Corp code not found for {company_key}. Check DART_API_KEY and corp code config."}]
 
     today = datetime.now(SEOUL)
-    bgn = (today - timedelta(days=365)).strftime("%Y%m%d")
-    end = today.strftime("%Y%m%d")
-
-    url = "https://opendart.fss.or.kr/api/list.json"
+    bgn   = (today - timedelta(days=365)).strftime("%Y%m%d")
+    end   = today.strftime("%Y%m%d")
+    url   = "https://opendart.fss.or.kr/api/list.json"
     params = {
         "crtfc_key": DART_API_KEY,
         "corp_code":  corp_code,
@@ -119,8 +108,7 @@ def get_disclosures(company_key: str, limit: int = 5) -> list[dict]:
         with httpx.Client(timeout=15) as client:
             r = client.get(url, params=params)
         r.raise_for_status()
-        data = r.json()
-        items = data.get("list", [])[:limit]
+        items = r.json().get("list", [])[:limit]
         results = []
         for it in items:
             rcept_no = it.get("rcept_no", "")
@@ -133,5 +121,10 @@ def get_disclosures(company_key: str, limit: int = 5) -> list[dict]:
             })
         return results
     except Exception as e:
-        log.error("DART API error: %s", e)
+        log.error("DART API error for %s: %s", company_key, e)
         return [{"error": str(e)}]
+
+
+async def get_disclosures(company_key: str, limit: int = 5) -> list[dict]:
+    """Async entry point — runs blocking DART fetch in a thread pool."""
+    return await asyncio.to_thread(_get_disclosures_sync, company_key, limit)
