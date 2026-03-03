@@ -1,45 +1,66 @@
 """
 db.py — SQLite persistence layer
+
+Schema (v5):
+  approved_chats  — access control (replaces whitelist env var)
+  user_lang       — language preference per chat
+  subscriptions   — one row per (chat_id, company, category); many-to-many
+  seen_disclosures — dedup by rcept_no
+  seen_news        — dedup by url hash
+  audit_log        — admin audit trail
 """
 
-import sqlite3
 import hashlib
 import logging
+import sqlite3
 from datetime import datetime
-from zoneinfo import ZoneInfo
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 DB_PATH = Path("data/bot.db")
 SEOUL   = ZoneInfo("Asia/Seoul")
 log     = logging.getLogger(__name__)
+
+# Canonical company keys used throughout the codebase
+COMPANIES = ["parataxis", "bitmax", "bitplanet", "microstrategy"]
+
+# Companies that support DART disclosures
+DART_COMPANIES = {"parataxis", "bitmax", "bitplanet"}
 
 
 def get_conn() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
 def init_db():
     with get_conn() as conn:
         conn.executescript("""
-            -- Core subscription table (new schema with per-category flags)
-            CREATE TABLE IF NOT EXISTS subscriptions (
-                chat_id               INTEGER PRIMARY KEY,
-                subscribed            INTEGER NOT NULL DEFAULT 1,
-                disclosures_enabled   INTEGER NOT NULL DEFAULT 1,
-                news_enabled          INTEGER NOT NULL DEFAULT 1,
-                strategy_enabled      INTEGER NOT NULL DEFAULT 1,
-                language              TEXT    NOT NULL DEFAULT 'en',
-                created_at            TEXT    DEFAULT (datetime('now'))
+            -- Access control: approved chat IDs
+            CREATE TABLE IF NOT EXISTS approved_chats (
+                chat_id    INTEGER PRIMARY KEY,
+                approved   INTEGER NOT NULL DEFAULT 0,
+                approved_at TEXT
             );
 
+            -- Language preference per chat
             CREATE TABLE IF NOT EXISTS user_lang (
                 chat_id  INTEGER PRIMARY KEY,
                 lang     TEXT NOT NULL DEFAULT 'en'
             );
 
+            -- Normalised subscriptions: one row per (chat_id, company, category)
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                chat_id   INTEGER NOT NULL,
+                company   TEXT    NOT NULL,
+                category  TEXT    NOT NULL,
+                PRIMARY KEY (chat_id, company, category)
+            );
+
+            -- Deduplication tables
             CREATE TABLE IF NOT EXISTS seen_disclosures (
                 rcept_no   TEXT PRIMARY KEY,
                 company    TEXT,
@@ -52,12 +73,7 @@ def init_db():
                 seen_at    TEXT DEFAULT (datetime('now'))
             );
 
-            CREATE TABLE IF NOT EXISTS seen_strategy (
-                item_hash  TEXT PRIMARY KEY,
-                company    TEXT,
-                seen_at    TEXT DEFAULT (datetime('now'))
-            );
-
+            -- Audit log
             CREATE TABLE IF NOT EXISTS audit_log (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp   TEXT NOT NULL,
@@ -69,147 +85,205 @@ def init_db():
             );
         """)
         _migrate(conn)
-    log.info("Database initialised at %s", DB_PATH)
+    log.info("DB init complete at %s", DB_PATH)
 
 
 def _migrate(conn: sqlite3.Connection):
     """
-    Add new columns to subscriptions if upgrading from old schema.
-    SQLite does not support IF NOT EXISTS on ALTER TABLE, so we check first.
+    Safe migration from old single-row subscriptions schema (if it exists).
+    Reads old bitmask rows and converts them to the new normalised format.
+    Idempotent — safe to run multiple times.
     """
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(subscriptions)")}
-    migrations = [
-        ("disclosures_enabled", "INTEGER NOT NULL DEFAULT 1"),
-        ("news_enabled",        "INTEGER NOT NULL DEFAULT 1"),
-        ("strategy_enabled",    "INTEGER NOT NULL DEFAULT 1"),
-        ("language",            "TEXT    NOT NULL DEFAULT 'en'"),
-    ]
-    for col, definition in migrations:
-        if col not in cols:
-            conn.execute(f"ALTER TABLE subscriptions ADD COLUMN {col} {definition}")
-            log.info("Migration: added column subscriptions.%s", col)
+    old_cols = {row[1] for row in conn.execute("PRAGMA table_info(subscriptions)")}
 
+    if "chat_id" in old_cols and "company" not in old_cols:
+        # Old schema detected — migrate data
+        log.info("Migration: converting old subscriptions schema to normalised format.")
+        rows = conn.execute(
+            "SELECT chat_id, subscribed, disclosures_enabled, news_enabled, language "
+            "FROM subscriptions WHERE subscribed=1"
+        ).fetchall()
 
-# ── Subscriptions ──────────────────────────────────────────────────────────────
+        # Rename old table, recreate new one
+        conn.executescript("""
+            ALTER TABLE subscriptions RENAME TO subscriptions_old;
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                chat_id   INTEGER NOT NULL,
+                company   TEXT    NOT NULL,
+                category  TEXT    NOT NULL,
+                PRIMARY KEY (chat_id, company, category)
+            );
+        """)
 
-def subscribe(chat_id: int, category: str = "all", lang: str = "en"):
-    """
-    Subscribe chat_id. category is one of: all / disclosures / news / strategy.
-    Existing rows are updated; missing category-enables default to 1.
-    """
-    with get_conn() as conn:
-        existing = conn.execute(
-            "SELECT chat_id FROM subscriptions WHERE chat_id=?", (chat_id,)
-        ).fetchone()
-
-        if not existing:
+        for row in rows:
+            cid = row["chat_id"]
+            # Migrate language
+            lang = row.get("language", "en") or "en"
             conn.execute(
-                "INSERT INTO subscriptions"
-                "  (chat_id, subscribed, disclosures_enabled, news_enabled, strategy_enabled, language)"
-                "  VALUES (?,1,1,1,1,?)",
-                (chat_id, lang),
+                "INSERT OR REPLACE INTO user_lang(chat_id, lang) VALUES(?,?)",
+                (cid, lang)
             )
+            # Migrate approval
+            conn.execute(
+                "INSERT OR IGNORE INTO approved_chats(chat_id, approved) VALUES(?,1)",
+                (cid,)
+            )
+            # Migrate subscriptions — default: subscribe all companies/categories
+            for company in COMPANIES:
+                for category in ["news", "disclosures"]:
+                    if category == "disclosures" and company not in DART_COMPANIES:
+                        continue
+                    conn.execute(
+                        "INSERT OR IGNORE INTO subscriptions(chat_id, company, category) VALUES(?,?,?)",
+                        (cid, company, category)
+                    )
 
-        if category == "all":
-            conn.execute(
-                "UPDATE subscriptions SET subscribed=1,"
-                "  disclosures_enabled=1, news_enabled=1, strategy_enabled=1,"
-                "  language=? WHERE chat_id=?",
-                (lang, chat_id),
-            )
-        elif category == "disclosures":
-            conn.execute(
-                "UPDATE subscriptions SET subscribed=1, disclosures_enabled=1,"
-                "  language=? WHERE chat_id=?",
-                (lang, chat_id),
-            )
-        elif category == "news":
-            conn.execute(
-                "UPDATE subscriptions SET subscribed=1, news_enabled=1,"
-                "  language=? WHERE chat_id=?",
-                (lang, chat_id),
-            )
-        elif category == "strategy":
-            conn.execute(
-                "UPDATE subscriptions SET subscribed=1, strategy_enabled=1,"
-                "  language=? WHERE chat_id=?",
-                (lang, chat_id),
-            )
+        conn.execute("DROP TABLE IF EXISTS subscriptions_old")
+        log.info("Migration complete: %d chats migrated.", len(rows))
 
-
-def unsubscribe(chat_id: int, category: str = "all"):
-    """
-    Unsubscribe category. If all categories become 0, set subscribed=0 too.
-    """
-    with get_conn() as conn:
-        if category == "all":
-            conn.execute(
-                "UPDATE subscriptions SET subscribed=0,"
-                "  disclosures_enabled=0, news_enabled=0, strategy_enabled=0"
-                "  WHERE chat_id=?",
-                (chat_id,),
+    # Ensure approved_chats exists (handles partial old schema cases)
+    try:
+        conn.execute("SELECT 1 FROM approved_chats LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS approved_chats (
+                chat_id    INTEGER PRIMARY KEY,
+                approved   INTEGER NOT NULL DEFAULT 0,
+                approved_at TEXT
             )
-            return
-
-        col_map = {
-            "disclosures": "disclosures_enabled",
-            "news":        "news_enabled",
-            "strategy":    "strategy_enabled",
-        }
-        col = col_map.get(category)
-        if col:
-            conn.execute(
-                f"UPDATE subscriptions SET {col}=0 WHERE chat_id=?",
-                (chat_id,),
-            )
-        # If all three are now 0, mark overall subscribed=0
-        row = conn.execute(
-            "SELECT disclosures_enabled, news_enabled, strategy_enabled"
-            "  FROM subscriptions WHERE chat_id=?",
-            (chat_id,),
-        ).fetchone()
-        if row and not any([row["disclosures_enabled"], row["news_enabled"], row["strategy_enabled"]]):
-            conn.execute("UPDATE subscriptions SET subscribed=0 WHERE chat_id=?", (chat_id,))
+        """)
 
 
-def get_subscription(chat_id: int) -> dict:
-    """Return full subscription state for a chat, or defaults if not found."""
+# ── Access control ─────────────────────────────────────────────────────────────
+
+def is_approved(chat_id: int) -> bool:
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT subscribed, disclosures_enabled, news_enabled, strategy_enabled, language"
-            "  FROM subscriptions WHERE chat_id=?",
-            (chat_id,),
+            "SELECT approved FROM approved_chats WHERE chat_id=?", (chat_id,)
         ).fetchone()
-    if not row:
-        return {"subscribed": 0, "disclosures_enabled": 0, "news_enabled": 0,
-                "strategy_enabled": 0, "language": "en"}
-    return dict(row)
+    return bool(row and row["approved"])
 
 
-def is_subscribed(chat_id: int) -> bool:
-    return bool(get_subscription(chat_id).get("subscribed", 0))
+def request_access(chat_id: int):
+    """Create a pending (unapproved) entry if one doesn't exist."""
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO approved_chats(chat_id, approved) VALUES(?,0)",
+            (chat_id,)
+        )
 
 
-def get_chats_for_category(category: str) -> list[dict]:
+def approve_chat(chat_id: int):
+    ts = datetime.now(SEOUL).strftime("%Y-%m-%d %H:%M:%S")
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO approved_chats(chat_id, approved, approved_at) VALUES(?,1,?) "
+            "ON CONFLICT(chat_id) DO UPDATE SET approved=1, approved_at=?",
+            (chat_id, ts, ts)
+        )
+
+
+def deny_chat(chat_id: int):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO approved_chats(chat_id, approved) VALUES(?,0) "
+            "ON CONFLICT(chat_id) DO UPDATE SET approved=0",
+            (chat_id,)
+        )
+
+
+# ── Subscriptions (normalised many-to-many) ────────────────────────────────────
+
+def subscribe(chat_id: int, company: str, category: str):
+    """Add a single (chat_id, company, category) subscription row."""
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO subscriptions(chat_id, company, category) VALUES(?,?,?)",
+            (chat_id, company, category)
+        )
+
+
+def subscribe_default(chat_id: int):
     """
-    Return list of {chat_id, language} for chats subscribed to this category.
-    category: disclosures | news | strategy
+    Default subscription when user runs /watch with no argument:
+      - news + disclosures for parataxis, bitmax, bitplanet
+      - news only for microstrategy
     """
-    col_map = {
-        "disclosures": "disclosures_enabled",
-        "news":        "news_enabled",
-        "strategy":    "strategy_enabled",
-    }
-    col = col_map.get(category, "disclosures_enabled")
+    with get_conn() as conn:
+        entries = []
+        for company in ["parataxis", "bitmax", "bitplanet"]:
+            entries.append((chat_id, company, "news"))
+            entries.append((chat_id, company, "disclosures"))
+        entries.append((chat_id, "microstrategy", "news"))
+        conn.executemany(
+            "INSERT OR IGNORE INTO subscriptions(chat_id, company, category) VALUES(?,?,?)",
+            entries
+        )
+
+
+def unsubscribe(chat_id: int, company: str | None = None, category: str | None = None):
+    """
+    Remove subscriptions. If company and category are both None, removes all.
+    If only category given, removes that category across all companies.
+    If both given, removes the single row.
+    """
+    with get_conn() as conn:
+        if company is None and category is None:
+            conn.execute("DELETE FROM subscriptions WHERE chat_id=?", (chat_id,))
+        elif company is None:
+            conn.execute(
+                "DELETE FROM subscriptions WHERE chat_id=? AND category=?",
+                (chat_id, category)
+            )
+        elif category is None:
+            conn.execute(
+                "DELETE FROM subscriptions WHERE chat_id=? AND company=?",
+                (chat_id, company)
+            )
+        else:
+            conn.execute(
+                "DELETE FROM subscriptions WHERE chat_id=? AND company=? AND category=?",
+                (chat_id, company, category)
+            )
+
+
+def get_subscriptions(chat_id: int) -> list[dict]:
+    """Return all subscription rows for a chat."""
     with get_conn() as conn:
         rows = conn.execute(
-            f"SELECT chat_id, language FROM subscriptions"
-            f"  WHERE subscribed=1 AND {col}=1",
+            "SELECT company, category FROM subscriptions WHERE chat_id=? ORDER BY company, category",
+            (chat_id,)
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-# ── Language preference ────────────────────────────────────────────────────────
+def has_any_subscription(chat_id: int) -> bool:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM subscriptions WHERE chat_id=? LIMIT 1", (chat_id,)
+        ).fetchone()
+    return row is not None
+
+
+def get_chats_for(company: str, category: str) -> list[dict]:
+    """
+    Return [{chat_id, lang}] for all chats subscribed to (company, category).
+    Joins with user_lang for the chat's language preference.
+    """
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT s.chat_id, COALESCE(ul.lang, 'en') AS lang
+            FROM subscriptions s
+            LEFT JOIN user_lang ul ON ul.chat_id = s.chat_id
+            WHERE s.company=? AND s.category=?
+            """,
+            (company, category)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Language ───────────────────────────────────────────────────────────────────
 
 def set_lang(chat_id: int, lang: str):
     with get_conn() as conn:
@@ -217,11 +291,6 @@ def set_lang(chat_id: int, lang: str):
             "INSERT INTO user_lang(chat_id, lang) VALUES(?,?) "
             "ON CONFLICT(chat_id) DO UPDATE SET lang=?",
             (chat_id, lang, lang)
-        )
-        # Keep subscriptions.language in sync too
-        conn.execute(
-            "UPDATE subscriptions SET language=? WHERE chat_id=?",
-            (lang, chat_id),
         )
 
 
@@ -237,10 +306,9 @@ def get_lang(chat_id: int) -> str:
 
 def is_new_disclosure(rcept_no: str, company: str) -> bool:
     with get_conn() as conn:
-        row = conn.execute(
+        if conn.execute(
             "SELECT 1 FROM seen_disclosures WHERE rcept_no=?", (rcept_no,)
-        ).fetchone()
-        if row:
+        ).fetchone():
             return False
         conn.execute(
             "INSERT INTO seen_disclosures(rcept_no, company) VALUES(?,?)",
@@ -252,10 +320,9 @@ def is_new_disclosure(rcept_no: str, company: str) -> bool:
 def is_new_news(url: str, company: str) -> bool:
     h = hashlib.md5(url.encode()).hexdigest()
     with get_conn() as conn:
-        row = conn.execute(
+        if conn.execute(
             "SELECT 1 FROM seen_news WHERE url_hash=?", (h,)
-        ).fetchone()
-        if row:
+        ).fetchone():
             return False
         conn.execute(
             "INSERT INTO seen_news(url_hash, company) VALUES(?,?)",
@@ -264,23 +331,7 @@ def is_new_news(url: str, company: str) -> bool:
     return True
 
 
-def is_new_strategy(identifier: str, company: str) -> bool:
-    """Deduplicate strategy alerts by a stable identifier (rcept_no or url hash)."""
-    h = hashlib.md5(identifier.encode()).hexdigest()
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM seen_strategy WHERE item_hash=?", (h,)
-        ).fetchone()
-        if row:
-            return False
-        conn.execute(
-            "INSERT INTO seen_strategy(item_hash, company) VALUES(?,?)",
-            (h, company)
-        )
-    return True
-
-
-# ── Audit log ─────────────────────────────────────────────────────────────────
+# ── Audit log ──────────────────────────────────────────────────────────────────
 
 def log_event(
     event_type: str,
@@ -289,14 +340,12 @@ def log_event(
     chat_id: int | None,
     payload: str = "",
 ):
-    """Write one row to audit_log. Never raises — errors are logged only."""
     try:
         ts = datetime.now(SEOUL).strftime("%Y-%m-%d %H:%M:%S")
         with get_conn() as conn:
             conn.execute(
-                "INSERT INTO audit_log"
-                "  (timestamp, event_type, user_id, username, chat_id, payload)"
-                "  VALUES (?,?,?,?,?,?)",
+                "INSERT INTO audit_log(timestamp, event_type, user_id, username, chat_id, payload)"
+                " VALUES(?,?,?,?,?,?)",
                 (ts, event_type, user_id, username or "", chat_id, (payload or "")[:500]),
             )
     except Exception as exc:
@@ -307,7 +356,7 @@ def get_recent_audit(limit: int = 20) -> list:
     with get_conn() as conn:
         return conn.execute(
             "SELECT timestamp, event_type, user_id, username, chat_id, payload"
-            "  FROM audit_log ORDER BY id DESC LIMIT ?",
+            " FROM audit_log ORDER BY id DESC LIMIT ?",
             (limit,),
         ).fetchall()
 
@@ -316,7 +365,7 @@ def get_recent_users(limit: int = 20) -> list:
     with get_conn() as conn:
         return conn.execute(
             "SELECT username, user_id, MAX(timestamp) AS last_seen"
-            "  FROM audit_log WHERE user_id IS NOT NULL"
-            "  GROUP BY user_id ORDER BY last_seen DESC LIMIT ?",
+            " FROM audit_log WHERE user_id IS NOT NULL"
+            " GROUP BY user_id ORDER BY last_seen DESC LIMIT ?",
             (limit,),
         ).fetchall()
