@@ -1,5 +1,5 @@
 """
-formatter.py — Format disclosures, news, and strategy into Telegram messages.
+formatter.py — Format data into Telegram-ready HTML strings.
 """
 
 from html import escape
@@ -33,31 +33,4 @@ def fmt_news(items: list[dict], lang: str) -> str:
             f"{i}. <a href=\"{it['url']}\">{escape(it['title'])}</a>"
             f"\n   {pub}{t}"
         )
-    return "\n".join(lines)
-
-
-def fmt_strategy(items: list[dict], lang: str) -> str:
-    if not items:
-        return (
-            "📭 No strategy-relevant items found."
-            if lang == "en" else
-            "📭 전략 관련 항목 없음."
-        )
-    label = "Strategy" if lang == "en" else "전략"
-    lines = [f"<b>♟ {label} (최신 {len(items)}건)</b>\n"]
-    for i, it in enumerate(items, 1):
-        source = it.get("source", "")
-        if source == "disclosure":
-            badge = "📋"
-            detail = (
-                f"   📅 {it.get('date','')} | #{it.get('rcept_no','')}\n"
-                f"   🔗 <a href=\"{it.get('url','')}\">DART 보기</a>"
-            )
-        else:
-            badge = "📰"
-            pub    = f" — {escape(it['publisher'])}" if it.get("publisher") else ""
-            t      = f" | {it.get('time','')}" if it.get("time") else ""
-            detail = f"   {badge}{pub}{t}\n   🔗 <a href=\"{it.get('url','')}\">링크</a>"
-
-        lines.append(f"{i}. {badge} <b>{escape(it.get('title',''))}</b>\n{detail}")
     return "\n".join(lines)
