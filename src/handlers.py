@@ -22,7 +22,7 @@ from keyboards import (
     kb_unwatch_categories, kb_watch_categories,
 )
 from news import get_news
-from prices import fmt_price, get_price
+from prices import fmt_price, fmt_stock_price, get_price, get_stock_price_krw, PARATAXIS_TICKER
 
 log = logging.getLogger(__name__)
 
@@ -407,6 +407,18 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         prompt = "코인을 선택하세요:" if lang == "ko" else "Select a coin:"
         await query.edit_message_text(
             prompt, reply_markup=kb_price(lang), parse_mode=ParseMode.HTML,
+        )
+
+    elif data.startswith("price:stock:"):
+        # Stock price handler (e.g. Parataxis Korea KOSDAQ 288330)
+        ticker = data.split(":")[2]
+        db.log_event("click", user.id, user.username, chat_id, data)
+        await query.edit_message_text("⏳ Fetching stock price…")
+        result = await get_stock_price_krw(ticker)
+        await query.edit_message_text(
+            fmt_stock_price(result, lang),
+            reply_markup=kb_after_price(lang),
+            parse_mode=ParseMode.HTML,
         )
 
     elif data.startswith("price:"):
