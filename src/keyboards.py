@@ -1,5 +1,8 @@
 """
 keyboards.py — All inline keyboard layouts.
+
+Change: kb_price() now includes a Parataxis Korea (KOSDAQ 288330) button.
+All other functions are completely unchanged.
 """
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -82,28 +85,29 @@ def kb_category(lang: str, company: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-# ── Price coin selection ───────────────────────────────────────────────────────
+# ── Price coin/stock selection ─────────────────────────────────────────────────
+# CHANGED: added Parataxis Korea (KOSDAQ 288330) row
 
 def kb_price(lang: str) -> InlineKeyboardMarkup:
+    nav = [
+        InlineKeyboardButton("⬅️ Back", callback_data="nav:main"),
+        InlineKeyboardButton("🏠 Home", callback_data="nav:home"),
+    ]
     if lang == "ko":
         rows = [
-            [InlineKeyboardButton("₿ 비트코인 (BTC)", callback_data="price:btc")],
-            [InlineKeyboardButton("Ξ 이더리움 (ETH)", callback_data="price:eth")],
-            [InlineKeyboardButton("✕ 리플 (XRP)",     callback_data="price:xrp")],
-            [
-                InlineKeyboardButton("⬅️ Back", callback_data="nav:main"),
-                InlineKeyboardButton("🏠 Home", callback_data="nav:home"),
-            ],
+            [InlineKeyboardButton("₿ 비트코인 (BTC)",           callback_data="price:btc")],
+            [InlineKeyboardButton("Ξ 이더리움 (ETH)",           callback_data="price:eth")],
+            [InlineKeyboardButton("✕ 리플 (XRP)",               callback_data="price:xrp")],
+            [InlineKeyboardButton("📈 파라택시스 코리아 (288330)", callback_data="price:stock:288330")],
+            nav,
         ]
     else:
         rows = [
-            [InlineKeyboardButton("₿ Bitcoin (BTC)",  callback_data="price:btc")],
-            [InlineKeyboardButton("Ξ Ethereum (ETH)", callback_data="price:eth")],
-            [InlineKeyboardButton("✕ XRP",            callback_data="price:xrp")],
-            [
-                InlineKeyboardButton("⬅️ Back", callback_data="nav:main"),
-                InlineKeyboardButton("🏠 Home", callback_data="nav:home"),
-            ],
+            [InlineKeyboardButton("₿ Bitcoin (BTC)",                  callback_data="price:btc")],
+            [InlineKeyboardButton("Ξ Ethereum (ETH)",                 callback_data="price:eth")],
+            [InlineKeyboardButton("✕ XRP",                            callback_data="price:xrp")],
+            [InlineKeyboardButton("📈 Parataxis Korea (KOSDAQ 288330)", callback_data="price:stock:288330")],
+            nav,
         ]
     return InlineKeyboardMarkup(rows)
 
