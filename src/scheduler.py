@@ -1,25 +1,18 @@
 """
-scheduler.py — Background monitoring every 10 minutes.
+scheduler.py — Background monitoring (PTB JobQueue).
 
-FIX: The previous implementation used a lambda inside add_job(), which is
-unreliable on Railway because APScheduler calls it synchronously and
-app.create_task() may not be available at call time.
-
-The correct pattern for python-telegram-bot v20+ is to use the
-post_init hook to wire up the scheduler using the application's
-job_queue, OR to use asyncio directly with run_coroutine_threadsafe.
-
-Here we use JobQueue (built into python-telegram-bot) which is the
-recommended approach and works correctly on Railway.
-
-Companies and categories monitored:
-  parataxis     → disclosures + news
-  bitmax        → disclosures + news
-  bitplanet     → disclosures + news
-  microstrategy → news only
+Fixes applied:
+  - Sends ONLY the single newest new item per company/category per run
+    (not a batch of 5, which caused spam).
+  - Recency guard: skips news items older than NEWS_MAX_AGE_DAYS (7).
+  - Dedup is checked BEFORE sending, not after — no mark-and-forget races.
+  - All fetched items are checked against dedup; only the best 1 is sent.
+  - Full structured logging: chats, fetched, new, alerted counts per run.
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from telegram import Bot
 from telegram.constants import ParseMode
@@ -30,7 +23,11 @@ from dart import get_disclosures
 from formatter import fmt_disclosures, fmt_news
 from news import get_news
 
-log = logging.getLogger(__name__)
+log  = logging.getLogger(__name__)
+SEOUL = ZoneInfo("Asia/Seoul")
+
+# ── Configuration ──────────────────────────────────────────────────────────────
+NEWS_MAX_AGE_DAYS = 7   # do not alert on news older than this
 
 _DART_COMPANIES = ["parataxis", "bitmax", "bitplanet"]
 _NEWS_COMPANIES = ["parataxis", "bitmax", "bitplanet", "microstrategy"]
@@ -48,66 +45,75 @@ def _label(company: str, lang: str) -> str:
 
 
 def register_jobs(app: Application, interval_minutes: int = 10):
-    """
-    Register the monitor job using PTB's built-in JobQueue.
-    Call this from main() BEFORE app.run_polling().
-    """
+    """Register the monitor job via PTB JobQueue. Call from main() before run_polling()."""
     app.job_queue.run_repeating(
         _monitor_job,
         interval=interval_minutes * 60,
-        first=30,  # wait 30s after startup before first run
+        first=30,
         name="monitor",
     )
-    log.info("Scheduler registered — monitor every %d min (first run in 30s).", interval_minutes)
+    log.info("Monitor job registered — every %d min, first run in 30 s.", interval_minutes)
 
 
 async def _monitor_job(context) -> None:
-    """Entry point called by PTB JobQueue — runs in the event loop."""
     bot: Bot = context.bot
-    log.info("=" * 50)
-    log.info("MONITOR RUN STARTED")
-    log.info("=" * 50)
+    now_str = datetime.now(SEOUL).strftime("%Y-%m-%d %H:%M:%S KST")
+    log.info("=" * 60)
+    log.info("MONITOR RUN START  %s", now_str)
+    log.info("=" * 60)
 
+    total_alerted = 0
     try:
         for company in _DART_COMPANIES:
-            await _check_disclosures(bot, company)
-
+            total_alerted += await _check_disclosures(bot, company)
         for company in _NEWS_COMPANIES:
-            await _check_news(bot, company)
+            total_alerted += await _check_news(bot, company)
+    except Exception:
+        log.exception("Unhandled exception in monitor job")
 
-    except Exception as e:
-        log.error("MONITOR RUN ERROR: %s", e, exc_info=True)
-
-    log.info("MONITOR RUN COMPLETE")
+    log.info("MONITOR RUN COMPLETE — total alerts sent: %d", total_alerted)
 
 
-async def _check_disclosures(bot: Bot, company: str):
+# ── Disclosure check ───────────────────────────────────────────────────────────
+
+async def _check_disclosures(bot: Bot, company: str) -> int:
     chats = db.get_chats_for(company, "disclosures")
-    log.info("[disclosures/%s] %d subscribed chats", company, len(chats))
+    log.info("[disc/%s] subscribed chats: %d", company, len(chats))
     if not chats:
-        return
+        return 0
 
     try:
         items = await get_disclosures(company, limit=10)
     except Exception as e:
-        log.error("[disclosures/%s] fetch error: %s", company, e)
-        return
+        log.error("[disc/%s] fetch exception: %s", company, e, exc_info=True)
+        return 0
 
     if not items:
-        log.info("[disclosures/%s] 0 items fetched", company)
-        return
+        log.info("[disc/%s] fetched: 0", company)
+        return 0
     if "error" in items[0]:
-        log.warning("[disclosures/%s] API error: %s", company, items[0]["error"])
-        return
+        log.warning("[disc/%s] API error: %s", company, items[0]["error"])
+        return 0
 
-    log.info("[disclosures/%s] %d items fetched", company, len(items))
+    log.info("[disc/%s] fetched: %d", company, len(items))
 
-    new_items = [it for it in items if db.is_new_disclosure(it["rcept_no"], company)]
-    log.info("[disclosures/%s] %d NEW items", company, len(new_items))
+    # Filter to new items (company-aware dedup)
+    new_items = [
+        it for it in items
+        if it.get("rcept_no") and db.is_new_disclosure(it["rcept_no"], company)
+    ]
+    log.info("[disc/%s] new: %d", company, len(new_items))
 
     if not new_items:
-        return
+        return 0
 
+    # Sort by date descending, pick the single newest
+    def _disc_key(it):
+        return it.get("pub_date", it.get("date", "")) or ""
+    new_items.sort(key=_disc_key, reverse=True)
+    best = new_items[0]
+
+    alerted = 0
     for chat in chats:
         chat_id = chat["chat_id"]
         lang    = chat.get("lang", "en")
@@ -117,29 +123,78 @@ async def _check_disclosures(bot: Bot, company: str):
             if lang == "ko" else
             f"🔔 <b>New Disclosure — {label}</b>\n\n"
         )
-        await _send(bot, chat_id, header + fmt_disclosures(new_items[:5], lang))
+        if await _send(bot, chat_id, header + fmt_disclosures([best], lang)):
+            alerted += 1
+
+    log.info("[disc/%s] alerted: %d chat(s)", company, alerted)
+    return alerted
 
 
-async def _check_news(bot: Bot, company: str):
+# ── News check ─────────────────────────────────────────────────────────────────
+
+def _parse_item_dt(item: dict) -> datetime | None:
+    """Parse the 'time' field (YYYY-MM-DD HH:MM) into a datetime, or None."""
+    time_str = item.get("time", "")
+    if not time_str:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(time_str, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return None
+
+
+async def _check_news(bot: Bot, company: str) -> int:
     chats = db.get_chats_for(company, "news")
-    log.info("[news/%s] %d subscribed chats", company, len(chats))
+    log.info("[news/%s] subscribed chats: %d", company, len(chats))
     if not chats:
-        return
+        return 0
 
     try:
         items = await get_news(company, limit=10)
     except Exception as e:
-        log.error("[news/%s] fetch error: %s", company, e)
-        return
+        log.error("[news/%s] fetch exception: %s", company, e, exc_info=True)
+        return 0
 
-    log.info("[news/%s] %d items fetched", company, len(items))
+    log.info("[news/%s] fetched: %d", company, len(items))
 
-    new_items = [it for it in items if it.get("url") and db.is_new_news(it["url"], company)]
-    log.info("[news/%s] %d NEW items", company, len(new_items))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=NEWS_MAX_AGE_DAYS)
+    recent_items = []
+    skipped_old  = 0
+
+    for it in items:
+        url = it.get("url", "")
+        if not url:
+            continue
+        dt = _parse_item_dt(it)
+        if dt is not None and dt < cutoff:
+            skipped_old += 1
+            # Still mark as seen so it never resurfaces
+            db.mark_news_seen(url, company)
+            continue
+        recent_items.append(it)
+
+    if skipped_old:
+        log.info("[news/%s] skipped %d old items (>%dd)", company, skipped_old, NEWS_MAX_AGE_DAYS)
+
+    new_items = [
+        it for it in recent_items
+        if db.is_new_news(it["url"], company)
+    ]
+    log.info("[news/%s] new (within age limit): %d", company, len(new_items))
 
     if not new_items:
-        return
+        return 0
 
+    # Sort by published time descending (items without time go last)
+    def _news_key(it):
+        dt = _parse_item_dt(it)
+        return dt if dt is not None else datetime.min.replace(tzinfo=timezone.utc)
+    new_items.sort(key=_news_key, reverse=True)
+    best = new_items[0]
+
+    alerted = 0
     for chat in chats:
         chat_id = chat["chat_id"]
         lang    = chat.get("lang", "en")
@@ -149,10 +204,17 @@ async def _check_news(bot: Bot, company: str):
             if lang == "ko" else
             f"🔔 <b>New News — {label}</b>\n\n"
         )
-        await _send(bot, chat_id, header + fmt_news(new_items[:5], lang))
+        if await _send(bot, chat_id, header + fmt_news([best], lang)):
+            alerted += 1
+
+    log.info("[news/%s] alerted: %d chat(s)", company, alerted)
+    return alerted
 
 
-async def _send(bot: Bot, chat_id: int, text: str):
+# ── Send helper ────────────────────────────────────────────────────────────────
+
+async def _send(bot: Bot, chat_id: int, text: str) -> bool:
+    """Send message. Returns True on success."""
     try:
         await bot.send_message(
             chat_id=chat_id,
@@ -160,6 +222,8 @@ async def _send(bot: Bot, chat_id: int, text: str):
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
         )
-        log.info("Alert sent to chat %d", chat_id)
+        log.info("Alert sent → chat %d", chat_id)
+        return True
     except Exception as e:
-        log.warning("Failed to send alert to %d: %s", chat_id, e)
+        log.warning("Failed to send alert → chat %d: %s", chat_id, e)
+        return False
