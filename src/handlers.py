@@ -23,6 +23,7 @@ from keyboards import (
 )
 from news import get_news
 from prices import fmt_price, fmt_stock_price, get_price, get_stock_price_krw, PARATAXIS_TICKER
+from brief import BriefError, take_screenshot_with_timeout
 
 log = logging.getLogger(__name__)
 
@@ -146,6 +147,8 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• /watch disclosures — 공시 알림 구독\n"
             "• /unwatch — 구독 취소\n"
             "• /status — 구독 상태 확인\n"
+            "• /watch brief — 데일리 브리프 구독\n"
+            "• /brief — 지금 브리프 보기\n"
             "• /help — 이 도움말"
         )
     else:
@@ -157,6 +160,8 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• /watch disclosures — Subscribe to disclosure alerts\n"
             "• /unwatch — Unsubscribe\n"
             "• /status — Check subscription status\n"
+            "• /watch brief — Subscribe to daily market brief\n"
+            "• /brief — Get the brief right now\n"
             "• /help — This message"
         )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
@@ -203,6 +208,15 @@ async def cmd_watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
+    elif arg in ("brief", "브리프"):
+        db.subscribe(chat_id, "brief", "brief")
+        msg = (
+            "데일리 마켓 브리프 구독이 활성화되었습니다. 매일 오전 10시에 받으실 수 있습니다. ✅"
+            if lang == "ko" else
+            "Subscribed to the <b>Daily Market Brief</b>. You'll receive it every day at 10:00 KST. ✅"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
     else:
         prompt = "구독할 카테고리를 선택하세요:" if lang == "ko" else "Select what to subscribe to:"
         await update.message.reply_text(
@@ -229,6 +243,14 @@ async def cmd_unwatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif arg in ("disclosures", "disclosure", "공시"):
         db.unsubscribe(chat_id, category="disclosures")
         msg = "공시 알림이 해제되었습니다. 🔕" if lang == "ko" else "Unsubscribed from <b>Disclosures</b> alerts. 🔕"
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    elif arg in ("brief", "브리프"):
+        db.unsubscribe(chat_id, company="brief", category="brief")
+        msg = (
+            "데일리 마켓 브리프 구독이 해제되었습니다. 🔕"
+            if lang == "ko" else
+            "Unsubscribed from the <b>Daily Market Brief</b>. 🔕"
+        )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
     elif arg in ("all", "전체"):
         db.unsubscribe(chat_id)
@@ -266,6 +288,9 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             label    = _company_label(company, lang)
             cats_str = ", ".join(sorted(cats))
             lines.append(f"✅ <b>{label}</b>: {cats_str}")
+    if by_company.get("brief"):
+        brief_label = "데일리 마켓 브리프 (매일 오전 10시)" if lang == "ko" else "Daily Market Brief (10:00 KST daily)"
+        lines.append(f"✅ <b>{brief_label}</b>")
 
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
@@ -603,3 +628,46 @@ def _detect_category(text: str, company: str = "") -> str:
         if kw in t:
             return "news"
     return ""
+
+
+# ── /brief ─────────────────────────────────────────────────────────────────────
+
+async def cmd_brief(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    On-demand dashboard screenshot. Sends the correct language dashboard.
+    Works regardless of subscription status.
+    """
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+    lang    = db.get_lang(chat_id)
+
+    if not _is_admin(user.id) and not db.is_approved(chat_id):
+        await update.message.reply_text("🔒 Access restricted.")
+        return
+
+    db.log_event("brief", user.id, user.username, chat_id)
+    wait_msg = "⏳ 대시보드 스크린샷 캡처 중…" if lang == "ko" else "⏳ Capturing dashboard screenshot…"
+    sent = await update.message.reply_text(wait_msg)
+
+    try:
+        png_bytes = await take_screenshot_with_timeout(lang)
+    except BriefError as exc:
+        log.error("cmd_brief screenshot error: %s", exc)
+        err_msg = (
+            "⚠️ 스크린샷을 가져오지 못했습니다. 잠시 후 다시 시도해 주세요."
+            if lang == "ko" else
+            "⚠️ Could not capture the dashboard screenshot. Please try again shortly."
+        )
+        await sent.edit_text(err_msg)
+        return
+
+    await sent.delete()
+    caption = (
+        "📊 데일리 마켓 대시보드"
+        if lang == "ko" else
+        "📊 Market Dashboard"
+    )
+    await update.message.reply_photo(
+        photo=png_bytes,
+        caption=caption,
+    )
