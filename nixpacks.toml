@@ -1,46 +1,40 @@
-# nixpacks.toml — Railway build configuration
+# nixpacks.toml — Railway build configuration for Playwright + Chromium
 #
-# Railway uses Nixpacks to build the container.  By default it runs
-# `pip install -r requirements.txt` but does not install system-level
-# browser binaries required by Playwright.
+# Root cause of the original failure:
+#   The previous nixpacks.toml put aptPkgs under [phases.setup] and cmds
+#   under [phases.install].  Railway's Nixpacks builder does NOT support
+#   mixing aptPkgs with a custom cmds list that way — when you override
+#   [phases.install].cmds the builder skips its own apt step entirely,
+#   so the system libraries are never installed and Chromium's own
+#   `playwright install chromium` downloads a binary that then can't
+#   find its .so dependencies at runtime.
 #
-# This file adds two steps:
-#   1. aptPkgs — system libraries that Chromium needs on Debian/Ubuntu.
-#   2. install — after pip install, download the Playwright Chromium binary.
+# Fix:
+#   Use `playwright install --with-deps chromium` as the single install
+#   command.  The --with-deps flag tells the Playwright CLI to run its
+#   own dependency installer (equivalent to `playwright install-deps`)
+#   which correctly handles the apt packages for the detected distro.
+#   This is the officially supported way to install Playwright on CI/CD.
 #
-# The `playwright install chromium` command honours the PLAYWRIGHT_BROWSERS_PATH
-# env var if set; otherwise it writes to ~/.cache/ms-playwright which is fine
-# for Railway's ephemeral build layer (the binary is baked into the image).
+#   We still list aptPkgs for Railway's Nix layer so that fonts and a few
+#   libs Playwright's installer sometimes misses are available.
 
 [phases.setup]
+nixPkgs = ["python311"]
 aptPkgs = [
-  # Chromium system dependencies (same list as `playwright install-deps chromium`)
+  "fonts-liberation",
+  "fonts-noto-cjk",        # Korean font rendering
+  "libglib2.0-0",
   "libnss3",
   "libnspr4",
-  "libatk1.0-0",
-  "libatk-bridge2.0-0",
-  "libcups2",
-  "libxkbcommon0",
-  "libxcomposite1",
-  "libxdamage1",
-  "libxfixes3",
-  "libxrandr2",
   "libgbm1",
   "libasound2",
-  "libpango-1.0-0",
-  "libcairo2",
-  "libatspi2.0-0",
-  "libx11-6",
-  "libx11-xcb1",
-  "libxcb1",
-  "libxext6",
-  "fonts-liberation",
 ]
 
 [phases.install]
 cmds = [
   "pip install -r requirements.txt",
-  "playwright install chromium",
+  "python -m playwright install --with-deps chromium",
 ]
 
 [start]
