@@ -10,6 +10,7 @@ Fixes applied:
   - Full structured logging: chats, fetched, new, alerted counts per run.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -22,6 +23,7 @@ import db
 from dart import get_disclosures
 from formatter import fmt_disclosures, fmt_news
 from news import get_news
+from brief import BriefError, take_screenshot_with_timeout
 
 log  = logging.getLogger(__name__)
 SEOUL = ZoneInfo("Asia/Seoul")
@@ -53,6 +55,15 @@ def register_jobs(app: Application, interval_minutes: int = 10):
         name="monitor",
     )
     log.info("Monitor job registered — every %d min, first run in 30 s.", interval_minutes)
+
+    # Daily brief — 10:00 KST every day
+    from datetime import time as dt_time
+    app.job_queue.run_daily(
+        _brief_job,
+        time=dt_time(hour=10, minute=0, second=0, tzinfo=SEOUL),
+        name="daily_brief",
+    )
+    log.info("Daily brief job registered — 10:00 KST.")
 
 
 async def _monitor_job(context) -> None:
@@ -226,4 +237,88 @@ async def _send(bot: Bot, chat_id: int, text: str) -> bool:
         return True
     except Exception as e:
         log.warning("Failed to send alert → chat %d: %s", chat_id, e)
+        return False
+
+
+# ── Daily brief job ────────────────────────────────────────────────────────────
+
+async def _brief_job(context) -> None:
+    """
+    Runs at 10:00 KST daily via PTB JobQueue.run_daily().
+
+    Takes ONE screenshot per language (en/ko), then reuses the same bytes for
+    every subscribed chat of that language. This avoids launching N browser
+    instances for N subscribers.
+    """
+    bot: Bot = context.bot
+    now_str  = datetime.now(SEOUL).strftime("%Y-%m-%d %H:%M:%S KST")
+    log.info("── BRIEF JOB START  %s ──", now_str)
+
+    chats = db.get_chats_for("brief", "brief")
+    log.info("[brief] subscribed chats: %d", len(chats))
+    if not chats:
+        log.info("[brief] no subscribers — skipping.")
+        return
+
+    # Partition chats by language
+    en_chats = [c for c in chats if c.get("lang", "en") != "ko"]
+    ko_chats = [c for c in chats if c.get("lang", "en") == "ko"]
+    log.info("[brief] en=%d  ko=%d", len(en_chats), len(ko_chats))
+
+    # Take screenshots (at most one per language)
+    screenshots: dict[str, bytes | None] = {"en": None, "ko": None}
+    errors:      dict[str, str]          = {}
+
+    for lang, group in (("en", en_chats), ("ko", ko_chats)):
+        if not group:
+            continue
+        try:
+            screenshots[lang] = await take_screenshot_with_timeout(lang)
+            log.info("[brief/%s] screenshot captured (%d bytes)", lang, len(screenshots[lang]))
+        except BriefError as exc:
+            errors[lang] = str(exc)
+            log.error("[brief/%s] screenshot failed: %s", lang, exc)
+
+    # Deliver to each chat
+    alerted = 0
+    for chat in chats:
+        chat_id = chat["chat_id"]
+        lang    = chat.get("lang", "en")
+        png     = screenshots.get(lang)
+
+        if png is None:
+            err = errors.get(lang, "Unknown error")
+            err_msg = (
+                f"⚠️ 오늘의 브리프를 가져오지 못했습니다: {err}"
+                if lang == "ko" else
+                f"⚠️ Could not capture today's brief: {err}"
+            )
+            if await _send(bot, chat_id, err_msg):
+                alerted += 1
+            continue
+
+        caption = (
+            f"📊 데일리 마켓 대시보드 — {datetime.now(SEOUL).strftime('%Y-%m-%d')} 오전 10시"
+            if lang == "ko" else
+            f"📊 Daily Market Dashboard — {datetime.now(SEOUL).strftime('%Y-%m-%d')} 10:00 KST"
+        )
+        if await _send_photo(bot, chat_id, png, caption):
+            alerted += 1
+
+    log.info("[brief] delivered to %d chat(s)", alerted)
+    log.info("── BRIEF JOB COMPLETE ──")
+
+
+async def _send_photo(bot: Bot, chat_id: int, png_bytes: bytes, caption: str) -> bool:
+    """Send a photo. Returns True on success."""
+    try:
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=png_bytes,
+            caption=caption,
+        )
+        log.info("Brief photo sent → chat %d", chat_id)
+        return True
+    except Exception as exc:
+        log.warning("Failed to send brief photo → chat %d: %s", chat_id, exc)
         return False
