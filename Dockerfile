@@ -1,6 +1,5 @@
 FROM python:3.12-slim
 
-# System libs Chromium needs — installed once, cached as a layer
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
     libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
@@ -11,13 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Python deps — separate layer so code changes don't reinstall everything
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Chromium using the SAME python that pip just installed into.
-# This is the only way to guarantee the browser lands where Playwright
-# will look for it at runtime (/usr/local/lib/python3.12/site-packages/...).
+# Install Chromium using the same python that pip installed into —
+# this guarantees the browser lands where Playwright will look at runtime.
 RUN python -m playwright install chromium
 
 COPY src/ ./src/
