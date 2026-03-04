@@ -420,3 +420,80 @@ def fmt_price(result: dict, lang: str) -> str:
     if lang == "ko":
         return f"💰 <b>{name}</b>\n현재가: <b>{formatted}</b>\n출처: {source}"
     return f"💰 <b>{name}</b>\nPrice: <b>{formatted}</b>\nSource: {source}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BRIEF — BTC extended data (current + 24h high/low/change) for /brief command.
+# Uses CoinGecko /coins/markets which returns all required fields in one call.
+# Completely separate from the existing simple-price pipeline above.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+BRIEF_CACHE_TTL_S = 45  # seconds — shared TTL for brief data
+
+# Cache keys: ("brief_btc", "USD") or ("brief_btc", "KRW")
+# Uses the same _cache dict already in this module.
+
+
+async def get_btc_brief(currency: str) -> dict:
+    """
+    Fetch BTC data suitable for the daily brief: current price, 24h high/low,
+    24h % change — all in one CoinGecko /coins/markets call.
+
+    currency: "USD" or "KRW"
+    Returns {current_price, high_24h, low_24h, change_pct_24h, currency}
+    or {"error": str} on failure.
+
+    Cached for BRIEF_CACHE_TTL_S seconds to absorb burst requests from
+    multiple users hitting /brief at the same time.
+    """
+    currency = currency.upper()
+    cache_key = ("brief_btc", currency)
+
+    # Check cache (reuse module-level _cache and monotonic ts)
+    entry = _cache.get(cache_key)
+    if entry and (time.monotonic() - entry["ts"]) < BRIEF_CACHE_TTL_S:
+        log.debug("BTC brief cache hit (%s)", currency)
+        return entry["result"]
+
+    vs = currency.lower()
+    url = f"https://api.coingecko.com/api/v3/coins/markets?vs_currency={vs}&ids=bitcoin"
+
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
+                r = await client.get(url)
+
+            if r.status_code == 429:
+                if attempt == 0:
+                    log.warning("CoinGecko 429 for BTC brief (%s) — retrying in %ds.", currency, RETRY_WAIT_S)
+                    await asyncio.sleep(RETRY_WAIT_S)
+                    continue
+                log.warning("CoinGecko still 429 for BTC brief (%s) after retry.", currency)
+                return {"error": "CoinGecko rate limited. Try again shortly."}
+
+            r.raise_for_status()
+            data = r.json()
+            if not data:
+                return {"error": "CoinGecko returned empty data."}
+
+            coin = data[0]
+            result = {
+                "current_price":    coin.get("current_price", 0),
+                "high_24h":         coin.get("high_24h", 0),
+                "low_24h":          coin.get("low_24h", 0),
+                "change_pct_24h":   coin.get("price_change_percentage_24h") or 0.0,
+                "currency":         currency,
+            }
+            _cache[cache_key] = {"result": result, "ts": time.monotonic()}
+            return result
+
+        except httpx.TimeoutException:
+            if attempt == 0:
+                await asyncio.sleep(RETRY_WAIT_S)
+                continue
+            return {"error": "CoinGecko timeout fetching BTC brief."}
+        except Exception as exc:
+            log.warning("BTC brief fetch error (%s): %s", currency, exc)
+            return {"error": str(exc)}
+
+    return {"error": "CoinGecko unavailable."}
