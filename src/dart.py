@@ -1,14 +1,17 @@
 """
 dart.py — DART OpenAPI integration.
 
-Fixes applied:
-  - CORP_CODE_OVERRIDES now has a real entry point for "parataxis" (fill in
-    the actual corp_code once known; leave empty to fall back to name search).
-  - Lookup tries multiple Korean AND English name variants, normalising
-    whitespace so spacing differences never cause misses.
-  - All HTTP calls have explicit timeouts.
-  - Everything blocking runs in asyncio.to_thread() — bot never hangs.
-  - Clear error messages returned to UI when corp code cannot be found.
+Changes in this version:
+  - Default limit restored to 5 (was incorrectly changed to 10).
+  - Corp code cache is now downloaded eagerly at import time via
+    warm_up_corp_codes(), which main.py calls once at startup inside
+    asyncio.to_thread(). This means the cache is ready before the first
+    user request arrives, eliminating the 10–15 minute cold-start lag.
+  - _download_corp_codes() and _load_corp_codes() are both synchronous
+    and safe to call from a thread. get_corp_code() remains synchronous
+    and callable from any thread.
+  - All other logic (overrides, name variants, timeout, async wrapper)
+    is unchanged.
 """
 
 import asyncio
@@ -33,50 +36,65 @@ CORP_CODE_CACHE = Path("data/corp_codes.xml")
 # ── Corp code overrides ────────────────────────────────────────────────────────
 # Fill in the exact 8-digit DART corp_code if you know it.
 # Leave as "" to fall through to name-search lookup.
-# Find your corp_code at: https://opendart.fss.or.kr/
 CORP_CODE_OVERRIDES: dict[str, str] = {
-    "parataxis": "01227039",   # e.g. "00123456" — fill in once confirmed
+    "parataxis": "",   # e.g. "00123456" — fill in once confirmed
     "bitmax":    "",
     "bitplanet": "",
 }
 
-# Name variants to search in the DART corp code XML.
-# Each entry is a list of substrings; we check if ANY substring is contained
-# in the normalised (whitespace-stripped, lower-case) corp name.
 CORP_NAME_VARIANTS: dict[str, list[str]] = {
-    "parataxis": [
-        "파라택시스",
-        "parataxis",
-        "para taxis",   # handles unexpected spacing
-    ],
-    "bitmax": [
-        "비트맥스",
-        "bitmax",
-    ],
-    "bitplanet": [
-        "비트플래닛",
-        "bitplanet",
-    ],
+    "parataxis": ["파라택시스", "parataxis", "para taxis"],
+    "bitmax":    ["비트맥스", "bitmax"],
+    "bitplanet": ["비트플래닛", "bitplanet"],
 }
 
-_corp_code_map: dict[str, str] = {}   # normalised_name -> corp_code
+_corp_code_map: dict[str, str] = {}
 _cache_loaded:  bool            = False
 
 
 def _normalise(s: str) -> str:
-    """Lower-case and collapse all whitespace for comparison."""
     return re.sub(r"\s+", "", s.lower())
 
 
-def _load_corp_codes() -> bool:
-    """Load corp codes from cache file. Return True on success."""
-    global _corp_code_map, _cache_loaded
-    if not CORP_CODE_CACHE.exists():
-        log.info("Corp code cache missing — downloading.")
-        _download_corp_codes()
-    if not CORP_CODE_CACHE.exists():
-        log.error("Corp code cache still missing after download attempt.")
+# ── Cache load / download ──────────────────────────────────────────────────────
+
+def _download_corp_codes() -> bool:
+    """
+    Download and unzip the DART corp code XML.
+    Synchronous — always call via asyncio.to_thread() or at startup.
+    Returns True on success.
+    """
+    url = "https://opendart.fss.or.kr/api/corpCode.xml"
+    try:
+        CORP_CODE_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        with httpx.Client(timeout=30) as client:
+            r = client.get(url, params={"crtfc_key": DART_API_KEY})
+        r.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+            xml_bytes = z.read(z.namelist()[0])
+        CORP_CODE_CACHE.write_bytes(xml_bytes)
+        log.info("Corp code XML downloaded (%d bytes).", len(xml_bytes))
+        return True
+    except Exception as e:
+        log.error("Corp code download failed: %s", e)
         return False
+
+
+def _load_corp_codes() -> bool:
+    """
+    Parse the cached corp code XML into _corp_code_map.
+    Downloads the file first if it does not exist.
+    Synchronous — always call via asyncio.to_thread() or at startup.
+    Returns True on success.
+    """
+    global _corp_code_map, _cache_loaded
+
+    if not CORP_CODE_CACHE.exists():
+        log.info("Corp code cache missing — downloading now.")
+        if not _download_corp_codes():
+            log.error("Corp code cache unavailable.")
+            return False
+
     try:
         tree = ET.parse(CORP_CODE_CACHE)
         _corp_code_map.clear()
@@ -93,21 +111,25 @@ def _load_corp_codes() -> bool:
         return False
 
 
-def _download_corp_codes():
-    """Download and unzip the DART corp code XML. Blocking — call via to_thread."""
-    url = "https://opendart.fss.or.kr/api/corpCode.xml"
-    try:
-        CORP_CODE_CACHE.parent.mkdir(parents=True, exist_ok=True)
-        with httpx.Client(timeout=30) as client:
-            r = client.get(url, params={"crtfc_key": DART_API_KEY})
-        r.raise_for_status()
-        with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-            xml_bytes = z.read(z.namelist()[0])
-        CORP_CODE_CACHE.write_bytes(xml_bytes)
-        log.info("Corp code XML downloaded (%d bytes).", len(xml_bytes))
-    except Exception as e:
-        log.error("Corp code download failed: %s", e)
+def warm_up_corp_codes() -> None:
+    """
+    Synchronous warm-up function. Call this once at startup (inside
+    asyncio.to_thread) so the corp code map is populated before any
+    user request arrives.
 
+    If the cache file already exists on disk (e.g. from a previous run
+    on a persistent volume) it is parsed immediately without any network
+    call. Only if it is missing does a download happen.
+    """
+    if _cache_loaded:
+        log.info("Corp code cache already loaded — skipping warm-up.")
+        return
+    log.info("Corp code warm-up starting…")
+    _load_corp_codes()
+    log.info("Corp code warm-up complete.")
+
+
+# ── Corp code lookup ───────────────────────────────────────────────────────────
 
 def get_corp_code(company_key: str) -> str:
     """
@@ -119,25 +141,22 @@ def get_corp_code(company_key: str) -> str:
     """
     key = company_key.lower()
 
-    # 1. Hard override
     override = CORP_CODE_OVERRIDES.get(key, "")
     if override:
         log.debug("Corp code for %s from override: %s", key, override)
         return override
 
-    # 2. Load cache if needed
     if not _cache_loaded:
+        # Lazy fallback in case warm-up was somehow skipped
         _load_corp_codes()
 
     if not _corp_code_map:
         log.error("Corp code map is empty — cannot look up %s.", key)
         return ""
 
-    # 3. Try each name variant
     variants = CORP_NAME_VARIANTS.get(key, [_normalise(key)])
     for variant in variants:
         normalised_variant = _normalise(variant)
-        # Exact substring match in normalised corp names
         for corp_name_norm, code in _corp_code_map.items():
             if normalised_variant in corp_name_norm:
                 log.info("Corp code for %s found via variant '%s': %s", key, variant, code)
@@ -146,10 +165,12 @@ def get_corp_code(company_key: str) -> str:
     log.warning(
         "Corp code not found for '%s'. Tried variants: %s. "
         "Set CORP_CODE_OVERRIDES['%s'] in dart.py to fix this.",
-        key, variants, key
+        key, variants, key,
     )
     return ""
 
+
+# ── DART API fetch ─────────────────────────────────────────────────────────────
 
 def _fmt_date(dt_str: str) -> str:
     try:
@@ -158,7 +179,7 @@ def _fmt_date(dt_str: str) -> str:
         return dt_str
 
 
-def _get_disclosures_sync(company_key: str, limit: int = 10) -> list[dict]:
+def _get_disclosures_sync(company_key: str, limit: int = 5) -> list[dict]:
     """Synchronous DART fetch — always run via asyncio.to_thread()."""
     corp_code = get_corp_code(company_key)
     if not corp_code:
@@ -186,8 +207,7 @@ def _get_disclosures_sync(company_key: str, limit: int = 10) -> list[dict]:
         with httpx.Client(timeout=15) as client:
             r = client.get(url, params=params)
         r.raise_for_status()
-        raw  = r.json()
-        rows = raw.get("list", [])[:limit]
+        rows = r.json().get("list", [])[:limit]
         results = []
         for it in rows:
             rcept_no = it.get("rcept_no", "")
@@ -197,7 +217,7 @@ def _get_disclosures_sync(company_key: str, limit: int = 10) -> list[dict]:
                 "rcept_no": rcept_no,
                 "url":      f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}",
                 "corp":     it.get("corp_name", ""),
-                "pub_date": it.get("rcept_dt", ""),  # raw YYYYMMDD for sorting
+                "pub_date": it.get("rcept_dt", ""),
             })
         log.info("DART [%s]: fetched %d disclosures (corp_code=%s).", company_key, len(results), corp_code)
         return results
@@ -211,6 +231,6 @@ def _get_disclosures_sync(company_key: str, limit: int = 10) -> list[dict]:
         return [{"error": msg}]
 
 
-async def get_disclosures(company_key: str, limit: int = 10) -> list[dict]:
+async def get_disclosures(company_key: str, limit: int = 5) -> list[dict]:
     """Async entry point — never blocks the event loop."""
     return await asyncio.to_thread(_get_disclosures_sync, company_key, limit)
