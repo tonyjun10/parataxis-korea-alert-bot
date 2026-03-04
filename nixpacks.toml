@@ -1,41 +1,5 @@
-# nixpacks.toml — Railway build configuration for Playwright + Chromium
-#
-# Root cause of the original failure:
-#   The previous nixpacks.toml put aptPkgs under [phases.setup] and cmds
-#   under [phases.install].  Railway's Nixpacks builder does NOT support
-#   mixing aptPkgs with a custom cmds list that way — when you override
-#   [phases.install].cmds the builder skips its own apt step entirely,
-#   so the system libraries are never installed and Chromium's own
-#   `playwright install chromium` downloads a binary that then can't
-#   find its .so dependencies at runtime.
-#
-# Fix:
-#   Use `playwright install --with-deps chromium` as the single install
-#   command.  The --with-deps flag tells the Playwright CLI to run its
-#   own dependency installer (equivalent to `playwright install-deps`)
-#   which correctly handles the apt packages for the detected distro.
-#   This is the officially supported way to install Playwright on CI/CD.
-#
-#   We still list aptPkgs for Railway's Nix layer so that fonts and a few
-#   libs Playwright's installer sometimes misses are available.
-
-[phases.setup]
-nixPkgs = ["python311"]
-aptPkgs = [
-  "fonts-liberation",
-  "fonts-noto-cjk",        # Korean font rendering
-  "libglib2.0-0",
-  "libnss3",
-  "libnspr4",
-  "libgbm1",
-  "libasound2",
-]
-
-[phases.install]
-cmds = [
-  "pip install -r requirements.txt",
-  "python -m playwright install --with-deps chromium",
-]
-
+# nixpacks.toml is superseded by Dockerfile.
+# Railway detects Dockerfile first and ignores this file.
+# Kept here only as a fallback reference.
 [start]
 cmd = "python src/main.py"
