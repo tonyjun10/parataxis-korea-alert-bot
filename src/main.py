@@ -49,6 +49,7 @@ from handlers import (
     message_handler,
 )
 from scheduler import register_jobs
+from dart import warm_up_corp_codes
 
 
 def main():
@@ -63,6 +64,14 @@ def main():
 
     db.init_db()
     log.info("Database ready.")
+
+    # Pre-load DART corp code cache in a background thread so the first
+    # disclosure request is instant rather than waiting 10–15 minutes.
+    # Using threading.Thread directly because the asyncio event loop is
+    # not running yet at this point in main().
+    import threading
+    threading.Thread(target=warm_up_corp_codes, daemon=True, name="dart-warmup").start()
+    log.info("DART corp code warm-up started in background.")
 
     # Build application — JobQueue is enabled by default in PTB v20+
     app = Application.builder().token(token).build()
