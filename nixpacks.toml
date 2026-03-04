@@ -1,0 +1,47 @@
+# nixpacks.toml — Railway build configuration
+#
+# Railway uses Nixpacks to build the container.  By default it runs
+# `pip install -r requirements.txt` but does not install system-level
+# browser binaries required by Playwright.
+#
+# This file adds two steps:
+#   1. aptPkgs — system libraries that Chromium needs on Debian/Ubuntu.
+#   2. install — after pip install, download the Playwright Chromium binary.
+#
+# The `playwright install chromium` command honours the PLAYWRIGHT_BROWSERS_PATH
+# env var if set; otherwise it writes to ~/.cache/ms-playwright which is fine
+# for Railway's ephemeral build layer (the binary is baked into the image).
+
+[phases.setup]
+aptPkgs = [
+  # Chromium system dependencies (same list as `playwright install-deps chromium`)
+  "libnss3",
+  "libnspr4",
+  "libatk1.0-0",
+  "libatk-bridge2.0-0",
+  "libcups2",
+  "libxkbcommon0",
+  "libxcomposite1",
+  "libxdamage1",
+  "libxfixes3",
+  "libxrandr2",
+  "libgbm1",
+  "libasound2",
+  "libpango-1.0-0",
+  "libcairo2",
+  "libatspi2.0-0",
+  "libx11-6",
+  "libx11-xcb1",
+  "libxcb1",
+  "libxext6",
+  "fonts-liberation",
+]
+
+[phases.install]
+cmds = [
+  "pip install -r requirements.txt",
+  "playwright install chromium",
+]
+
+[start]
+cmd = "python src/main.py"
