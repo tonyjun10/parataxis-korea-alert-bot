@@ -22,7 +22,7 @@ CORP_CODE_CACHE = Path("data/corp_codes.xml")
 
 # Manual overrides — fill in 8-digit DART corp_code if known
 CORP_CODE_OVERRIDES: dict[str, str] = {
-    "parataxis": "",
+    "parataxis": "01227039",
     "bitmax":    "",
     "bitplanet": "",
 }
@@ -143,3 +143,4 @@ def _get_disclosures_sync(company_key: str, limit: int = 5) -> list[dict]:
 async def get_disclosures(company_key: str, limit: int = 5) -> list[dict]:
     """Async entry point — never blocks the event loop."""
     return await asyncio.to_thread(_get_disclosures_sync, company_key, limit)
+
