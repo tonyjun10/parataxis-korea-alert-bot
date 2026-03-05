@@ -1,24 +1,20 @@
 FROM python:3.12-slim
 
+# Install system Chromium via apt — no Playwright browser download needed.
+# System Chromium is always at /usr/bin/chromium and is guaranteed to be
+# present after this step regardless of any env var or path issues.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
-    libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
-    libgbm1 libasound2 libpango-1.0-0 libcairo2 libatspi2.0-0 \
-    libx11-6 libx11-xcb1 libxcb1 libxext6 \
-    fonts-liberation fonts-noto-cjk ca-certificates wget \
+    chromium \
+    fonts-liberation \
+    fonts-noto-cjk \
+    ca-certificates \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Install chromium via the playwright driver binary directly.
-# This is identical to what `playwright install chromium` does internally,
-# but invokes the driver that the installed package will use at runtime,
-# guaranteeing the browser lands in the path the runtime expects.
-ARG PLAYWRIGHT_CACHE_BUST=5
-RUN /usr/local/lib/python3.12/site-packages/playwright/driver/playwright.sh install chromium
 
 COPY src/ ./src/
 RUN mkdir -p data logs
