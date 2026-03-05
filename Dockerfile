@@ -13,15 +13,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# PLAYWRIGHT_BROWSERS_PATH pins the install location so the runtime
-# env var and the build-time install always agree on the same path.
 ENV PLAYWRIGHT_BROWSERS_PATH=/pw-browsers
-
-# Cache-bust: changing this value forces Docker to re-run the install
-# even if requirements.txt hasn't changed.
-ARG PLAYWRIGHT_CACHE_BUST=2
+ARG PLAYWRIGHT_CACHE_BUST=3
 RUN python -m playwright install chromium
-RUN python -m playwright install-deps chromium
 
 COPY src/ ./src/
 RUN mkdir -p data logs
