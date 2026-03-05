@@ -13,9 +13,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-ENV PLAYWRIGHT_BROWSERS_PATH=/pw-browsers
-ARG PLAYWRIGHT_CACHE_BUST=3
-RUN python -m playwright install chromium
+# Install chromium via the playwright driver binary directly.
+# This is identical to what `playwright install chromium` does internally,
+# but invokes the driver that the installed package will use at runtime,
+# guaranteeing the browser lands in the path the runtime expects.
+ARG PLAYWRIGHT_CACHE_BUST=5
+RUN /usr/local/lib/python3.12/site-packages/playwright/driver/playwright.sh install chromium
 
 COPY src/ ./src/
 RUN mkdir -p data logs
