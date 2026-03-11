@@ -24,6 +24,7 @@ from keyboards import (
 from news import get_news
 from prices import fmt_price, fmt_stock_price, get_price, get_stock_price_krw, PARATAXIS_TICKER
 from brief import BriefError, take_screenshot_with_timeout
+from luxor import LuxorError, fmt_mining_stats, get_mining_stats
 
 log = logging.getLogger(__name__)
 
@@ -217,6 +218,15 @@ async def cmd_watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
+    elif arg in ("mining", "채굴"):
+        db.subscribe(chat_id, "mining", "mining")
+        msg = (
+            "채굴 현황 알림이 활성화되었습니다. ✅"
+            if lang == "ko" else
+            "Subscribed to <b>Mining Updates</b>. ✅"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
     else:
         prompt = "구독할 카테고리를 선택하세요:" if lang == "ko" else "Select what to subscribe to:"
         await update.message.reply_text(
@@ -250,6 +260,14 @@ async def cmd_unwatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "데일리 마켓 브리프 구독이 해제되었습니다. 🔕"
             if lang == "ko" else
             "Unsubscribed from the <b>Daily Market Brief</b>. 🔕"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    elif arg in ("mining", "채굴"):
+        db.unsubscribe(chat_id, company="mining", category="mining")
+        msg = (
+            "채굴 현황 알림이 해제되었습니다. 🔕"
+            if lang == "ko" else
+            "Unsubscribed from <b>Mining Updates</b>. 🔕"
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
     elif arg in ("all", "전체"):
@@ -291,6 +309,9 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if by_company.get("brief"):
         brief_label = "데일리 마켓 브리프 (매일 오전 10시)" if lang == "ko" else "Daily Market Brief (10:00 KST daily)"
         lines.append(f"✅ <b>{brief_label}</b>")
+    if by_company.get("mining"):
+        mining_label = "채굴 현황 알림" if lang == "ko" else "Mining Updates"
+        lines.append(f"✅ <b>{mining_label}</b>")
 
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
@@ -671,3 +692,33 @@ async def cmd_brief(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         photo=png_bytes,
         caption=caption,
     )
+
+# ── /mining ────────────────────────────────────────────────────────────────────
+
+async def cmd_mining(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """On-demand mining stats fetch."""
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+    lang    = db.get_lang(chat_id)
+
+    if not _is_admin(user.id) and not db.is_approved(chat_id):
+        await update.message.reply_text("🔒 Access restricted.")
+        return
+
+    db.log_event("mining", user.id, user.username, chat_id)
+    wait_msg = "⏳ 채굴 현황 불러오는 중…" if lang == "ko" else "⏳ Fetching mining stats…"
+    sent = await update.message.reply_text(wait_msg)
+
+    try:
+        stats = await get_mining_stats()
+    except LuxorError as exc:
+        log.error("cmd_mining error: %s", exc)
+        err_msg = (
+            "⚠️ 채굴 데이터를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요."
+            if lang == "ko" else
+            "⚠️ Could not fetch mining stats. Please try again shortly."
+        )
+        await sent.edit_text(err_msg)
+        return
+
+    await sent.edit_text(fmt_mining_stats(stats, lang), parse_mode=ParseMode.HTML)
