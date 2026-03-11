@@ -24,6 +24,7 @@ from dart import get_disclosures
 from formatter import fmt_disclosures, fmt_news
 from news import get_news
 from brief import BriefError, take_screenshot_with_timeout
+from luxor import LuxorError, fmt_mining_stats, get_mining_stats
 
 log  = logging.getLogger(__name__)
 SEOUL = ZoneInfo("Asia/Seoul")
@@ -64,6 +65,15 @@ def register_jobs(app: Application, interval_minutes: int = 10):
         name="daily_brief",
     )
     log.info("Daily brief job registered — 10:00 KST.")
+
+    # Mining update — every 10 min alongside monitor
+    app.job_queue.run_repeating(
+        _mining_job,
+        interval=interval_minutes * 60,
+        first=60,
+        name="mining",
+    )
+    log.info("Mining job registered — every %d min.", interval_minutes)
 
 
 async def _monitor_job(context) -> None:
@@ -322,3 +332,52 @@ async def _send_photo(bot: Bot, chat_id: int, png_bytes: bytes, caption: str) ->
     except Exception as exc:
         log.warning("Failed to send brief photo → chat %d: %s", chat_id, exc)
         return False
+
+# ── Mining job ────────────────────────────────────────────────────────────────
+
+async def _mining_job(context) -> None:
+    """
+    Runs every 10 min. Fetches mining stats and sends to all /watch mining
+    subscribers. Only sends if the stats have materially changed since last
+    run (hashrate changes by >1% or worker count changes) to avoid spam.
+    """
+    bot: Bot = context.bot
+    log.info("── MINING JOB START ──")
+
+    chats = db.get_chats_for("mining", "mining")
+    log.info("[mining] subscribed chats: %d", len(chats))
+    if not chats:
+        return
+
+    try:
+        stats = await get_mining_stats()
+    except LuxorError as exc:
+        log.error("[mining] fetch failed: %s", exc)
+        return
+
+    # Change detection — store last values in job context data
+    data        = context.job.data or {}
+    last_hr     = data.get("hashrate_ph", -1.0)
+    last_workers = data.get("active_workers", -1)
+
+    hr_changed = last_hr < 0 or abs(stats.hashrate_ph - last_hr) / max(last_hr, 0.0001) > 0.01
+    wk_changed = last_workers < 0 or stats.active_workers != last_workers
+
+    if not (hr_changed or wk_changed):
+        log.info("[mining] no material change — skipping alert")
+        return
+
+    context.job.data = {
+        "hashrate_ph":    stats.hashrate_ph,
+        "active_workers": stats.active_workers,
+    }
+
+    alerted = 0
+    for chat in chats:
+        chat_id = chat["chat_id"]
+        lang    = chat.get("lang", "en")
+        if await _send(bot, chat_id, fmt_mining_stats(stats, lang)):
+            alerted += 1
+
+    log.info("[mining] alerted %d chat(s)", alerted)
+    log.info("── MINING JOB COMPLETE ──")
