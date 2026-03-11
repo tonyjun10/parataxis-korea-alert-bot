@@ -1,13 +1,14 @@
 """
 luxor.py — Luxor Mining Pool API client.
 
-Confirmed from API testing:
-  - /pool/hashrate-efficiency/BTC EXISTS (needs start_date, end_date, tick_size)
-  - subaccount_names must be passed as REPEATED params, not comma-joined
-  - /pool/revenue, /pool/summary, /pool/workers, /pool/pool-stats do NOT exist
+All endpoints confirmed from official docs:
+  GET /pool/summary/{currency_type}         → hashrate, active_miners, revenue_24h
+  GET /pool/active-workers/{currency_type}  → active_workers time series
+  GET /pool/revenue/{currency_type}         → revenue time series
+  GET /pool/workers/{currency_type}         → total_active, workers list
 
-Trying subaccount-level endpoints for workers/revenue which are likely
-under /subaccounts/ prefix based on the docs sidebar structure.
+Key: currency_type is a PATH param, not a query param.
+subaccount_names is a repeated query param.
 """
 
 import asyncio
@@ -23,8 +24,8 @@ log = logging.getLogger(__name__)
 LUXOR_API_KEY = os.environ.get("LUXOR_API_KEY", "")
 BASE_URL      = "https://app.luxor.tech/api/v2"
 SUBACCOUNTS   = ["blackcreek", "blackcreekluxoos"]
-TIMEOUT       = 15
 CURRENCY      = "BTC"
+TIMEOUT       = 15
 
 
 class LuxorError(Exception):
@@ -47,28 +48,24 @@ def _headers() -> dict:
 
 
 def _get(path: str, params: list[tuple]) -> dict | list:
-    """
-    params is a list of (key, value) tuples to support repeated keys.
-    e.g. [("subaccount_names", "blackcreek"), ("subaccount_names", "blackcreekluxoos")]
-    """
     url = f"{BASE_URL}{path}"
     log.info("[luxor] GET %s  params=%s", url, params)
     with httpx.Client(timeout=TIMEOUT) as client:
         r = client.get(url, headers=_headers(), params=params)
     if r.status_code >= 400:
-        log.warning("[luxor] %s → %d body: %s", path, r.status_code, r.text[:600])
+        log.warning("[luxor] %s → %d: %s", path, r.status_code, r.text[:600])
         r.raise_for_status()
     data = r.json()
-    log.info("[luxor] %s → 200: %s", path, str(data)[:800])
+    log.info("[luxor] %s → 200: %s", path, str(data)[:1000])
     return data
 
 
-def _subaccount_params(extra: list[tuple] | None = None) -> list[tuple]:
-    """Subaccount names as repeated params — required by Luxor API."""
-    params = [("subaccount_names", s) for s in SUBACCOUNTS]
+def _sub_params(extra: list[tuple] | None = None) -> list[tuple]:
+    """Subaccount names as repeated query params."""
+    p = [("subaccount_names", s) for s in SUBACCOUNTS]
     if extra:
-        params.extend(extra)
-    return params
+        p.extend(extra)
+    return p
 
 
 def _date_params(start: date, end: date, tick: str = "1d") -> list[tuple]:
@@ -79,33 +76,20 @@ def _date_params(start: date, end: date, tick: str = "1d") -> list[tuple]:
     ]
 
 
-# ── Extraction helpers ────────────────────────────────────────────────────────
+# ── Data extraction ───────────────────────────────────────────────────────────
 
-def _find_list(data: dict | list) -> list:
+def _find_list(data, *wrapper_keys) -> list:
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        for key in ("hashrate_efficiency", "data", "result", "workers",
-                    "revenue", "items", "subaccounts"):
-            v = data.get(key)
+        for k in wrapper_keys:
+            v = data.get(k)
             if isinstance(v, list):
                 return v
     return []
 
 
-def _sum_key(data: dict | list, *keys: str) -> float:
-    records = _find_list(data)
-    if not records:
-        # flat dict
-        if isinstance(data, dict):
-            for k in keys:
-                v = data.get(k)
-                if v is not None:
-                    try:
-                        return float(v)
-                    except (TypeError, ValueError):
-                        pass
-        return 0.0
+def _sum_field(records: list, *keys: str) -> float:
     total = 0.0
     for rec in records:
         if not isinstance(rec, dict):
@@ -121,8 +105,18 @@ def _sum_key(data: dict | list, *keys: str) -> float:
     return total
 
 
-def _latest_key(data: dict | list, *keys: str) -> float:
-    records = _find_list(data)
+def _latest_field(data, *keys: str) -> float:
+    """Get a field from the most recent record or flat dict."""
+    if isinstance(data, dict):
+        for k in keys:
+            v = data.get(k)
+            if v is not None:
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    pass
+    records = _find_list(data, "active_workers", "revenue", "subaccounts",
+                         "workers", "data", "items")
     for rec in reversed(records):
         if not isinstance(rec, dict):
             continue
@@ -136,7 +130,7 @@ def _latest_key(data: dict | list, *keys: str) -> float:
     return 0.0
 
 
-# ── Fetch ─────────────────────────────────────────────────────────────────────
+# ── Core fetch ────────────────────────────────────────────────────────────────
 
 def _fetch_sync() -> MiningStats:
     if not LUXOR_API_KEY:
@@ -146,71 +140,63 @@ def _fetch_sync() -> MiningStats:
     yesterday   = today - timedelta(days=1)
     month_start = today.replace(day=1)
 
-    # ── Hashrate + efficiency (confirmed working endpoint) ─────────────────
+    # ── /pool/summary/BTC — hashrate + active miners + 24h revenue ────────
+    # No date params needed; subaccount_names optional
     hr_ph      = 0.0
     efficiency = -1.0
+    btc_today  = 0.0
     try:
-        params = _date_params(yesterday, today, "1h") + _subaccount_params()
-        data   = _get(f"/pool/hashrate-efficiency/{CURRENCY}", params)
-        raw_hr = _latest_key(data, "hashrate", "avg_hashrate", "currentHashrate")
+        data = _get(f"/pool/summary/{CURRENCY}", _sub_params())
+        # hashrate_5m is in H/s
+        raw_hr = _latest_field(data, "hashrate_5m", "hashrate_1h", "hashrate_24h")
         hr_ph  = raw_hr / 1e15 if raw_hr else 0.0
-        raw_eff = _latest_key(data, "efficiency", "hashrate_efficiency", "eff")
+        raw_eff = _latest_field(data, "efficiency_24h", "efficiency_1h", "efficiency_5m")
         if raw_eff:
             efficiency = raw_eff * 100 if raw_eff <= 1.0 else raw_eff
+        # revenue_24h is a list of {currency_type, revenue_type, revenue}
+        rev_list  = _find_list(data.get("revenue_24h", []) if isinstance(data, dict) else [],
+                               "revenue")
+        if not rev_list and isinstance(data, dict):
+            rev_list = _find_list(data, "revenue_24h", "revenue")
+        btc_today = _sum_field(rev_list, "revenue")
+        if btc_today == 0.0:
+            # try direct key on summary dict
+            btc_today = _latest_field(data, "revenue_24h", "revenue")
     except Exception as e:
-        log.warning("[luxor] hashrate-efficiency failed: %s", e)
+        log.warning("[luxor] summary failed: %s", e)
 
-    # ── Workers — try subaccount-level and pool-level paths ───────────────
+    # ── /pool/active-workers/BTC — worker count ────────────────────────────
     workers = 0
-    worker_paths = [
-        "/pool/get-active-workers",
-        "/pool/workers",
-        "/subaccounts/workers",
-        "/subaccounts/active-workers",
-    ]
-    for path in worker_paths:
-        try:
-            data    = _get(path, _subaccount_params())
-            workers = int(_sum_key(data, "active_workers", "activeWorkers",
-                                   "workers", "worker_count") or 0)
-            break
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                continue
-            log.warning("[luxor] workers %s failed: %s", path, e)
-            break
-        except Exception as e:
-            log.warning("[luxor] workers %s failed: %s", path, e)
-            break
+    try:
+        params = _date_params(yesterday, today, "1h") + _sub_params()
+        data   = _get(f"/pool/active-workers/{CURRENCY}", params)
+        # Response: {subaccounts:[...], active_workers:[{date_time, active_workers}], pagination}
+        aw_list  = _find_list(data, "active_workers")
+        latest   = aw_list[-1] if aw_list else {}
+        workers  = int(float(latest.get("active_workers", 0)))
+    except Exception as e:
+        log.warning("[luxor] active-workers failed: %s", e)
 
-    # ── Revenue — try various paths with date params ───────────────────────
-    btc_today = 0.0
-    btc_mtd   = 0.0
-    revenue_paths = [
-        "/pool/get-revenue",
-        "/subaccounts/revenue",
-        "/pool/hashrate-revenue",
-        "/pool/revenue-history",
-    ]
-    for path in revenue_paths:
-        try:
-            today_params = _date_params(yesterday, today) + _subaccount_params()
-            mtd_params   = _date_params(month_start, today) + _subaccount_params()
-            rev_today    = _get(path, today_params)
-            btc_today    = _sum_key(rev_today, "revenue", "amount", "btc_amount",
-                                    "total_revenue", "daily_revenue")
-            rev_mtd      = _get(path, mtd_params)
-            btc_mtd      = _sum_key(rev_mtd, "revenue", "amount", "btc_amount",
-                                    "total_revenue", "monthly_revenue")
-            break
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
+    # ── /pool/revenue/BTC — MTD revenue ───────────────────────────────────
+    btc_mtd = 0.0
+    try:
+        params  = _date_params(month_start, today, "1d") + _sub_params()
+        data    = _get(f"/pool/revenue/{CURRENCY}", params)
+        # Response: {subaccounts:[...], revenue:[{date_time, revenue:{currency_type,revenue_type,revenue}}]}
+        rev_list = _find_list(data, "revenue")
+        for entry in rev_list:
+            if not isinstance(entry, dict):
                 continue
-            log.warning("[luxor] revenue %s failed: %s", path, e)
-            break
-        except Exception as e:
-            log.warning("[luxor] revenue %s failed: %s", path, e)
-            break
+            inner = entry.get("revenue", {})
+            if isinstance(inner, dict):
+                try:
+                    btc_mtd += float(inner.get("revenue", 0) or 0)
+                except (TypeError, ValueError):
+                    pass
+            elif isinstance(inner, (int, float)):
+                btc_mtd += float(inner)
+    except Exception as e:
+        log.warning("[luxor] revenue MTD failed: %s", e)
 
     log.info("[luxor] final → %.6f PH/s  %d workers  today=%.8f  mtd=%.8f  eff=%s",
              hr_ph, workers, btc_today, btc_mtd,
