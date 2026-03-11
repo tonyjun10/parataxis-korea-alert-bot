@@ -40,6 +40,7 @@ from handlers import (
     callback_handler,
     cmd_audit,
     cmd_brief,
+    cmd_mining,
     cmd_help,
     cmd_start,
     cmd_status,
@@ -85,6 +86,7 @@ def main():
     app.add_handler(CommandHandler("audit",   cmd_audit))
     app.add_handler(CommandHandler("users",   cmd_users))
     app.add_handler(CommandHandler("brief",   cmd_brief))
+    app.add_handler(CommandHandler("mining",  cmd_mining))
 
     # ── Callback (inline buttons) ──────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(callback_handler))
