@@ -61,8 +61,12 @@ def _get(path: str, params: list[tuple]) -> dict | list:
 
 
 def _sub_params(extra: list[tuple] | None = None) -> list[tuple]:
-    """Subaccount names as repeated query params."""
-    p = [("subaccount_names", s) for s in SUBACCOUNTS]
+    """
+    No subaccount_names filter — returns all subaccounts the API key has access to.
+    The 403 errors confirmed the hardcoded names don't match what the key can see.
+    We log the full response so we can identify the real subaccount names.
+    """
+    p = []
     if extra:
         p.extend(extra)
     return p
