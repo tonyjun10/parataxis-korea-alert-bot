@@ -1,18 +1,13 @@
 """
 luxor.py — Luxor Mining Pool API client.
 
-Confirmed working endpoints (from API testing):
-  GET /pool/hashrate-efficiency/{currency_type}
-    Required: start_date, end_date, tick_size
-    Optional: subaccount_names
+Confirmed from API testing:
+  - /pool/hashrate-efficiency/BTC EXISTS (needs start_date, end_date, tick_size)
+  - subaccount_names must be passed as REPEATED params, not comma-joined
+  - /pool/revenue, /pool/summary, /pool/workers, /pool/pool-stats do NOT exist
 
-  GET /pool/workers          (to be confirmed)
-  GET /pool/pool-stats       (to be confirmed)
-  GET /pool/hashrate         (to be confirmed)
-
-Strategy: use hashrate-efficiency for hashrate + efficiency data.
-For workers/revenue, try multiple candidate endpoint names and log
-the raw response so we can identify correct keys on first run.
+Trying subaccount-level endpoints for workers/revenue which are likely
+under /subaccounts/ prefix based on the docs sidebar structure.
 """
 
 import asyncio
@@ -27,7 +22,7 @@ log = logging.getLogger(__name__)
 
 LUXOR_API_KEY = os.environ.get("LUXOR_API_KEY", "")
 BASE_URL      = "https://app.luxor.tech/api/v2"
-SUBACCOUNTS   = "blackcreek,blackcreekluxoos"   # comma-separated, both at once
+SUBACCOUNTS   = ["blackcreek", "blackcreekluxoos"]
 TIMEOUT       = 15
 CURRENCY      = "BTC"
 
@@ -51,205 +46,171 @@ def _headers() -> dict:
     return {"authorization": LUXOR_API_KEY}
 
 
-def _get(path: str, params: dict) -> dict | list:
+def _get(path: str, params: list[tuple]) -> dict | list:
+    """
+    params is a list of (key, value) tuples to support repeated keys.
+    e.g. [("subaccount_names", "blackcreek"), ("subaccount_names", "blackcreekluxoos")]
+    """
     url = f"{BASE_URL}{path}"
-    log.info("[luxor] GET %s  params=%s", url, {k: v for k, v in params.items() if k != "authorization"})
+    log.info("[luxor] GET %s  params=%s", url, params)
     with httpx.Client(timeout=TIMEOUT) as client:
         r = client.get(url, headers=_headers(), params=params)
     if r.status_code >= 400:
         log.warning("[luxor] %s → %d body: %s", path, r.status_code, r.text[:600])
         r.raise_for_status()
     data = r.json()
-    log.info("[luxor] %s → 200 body: %s", path, str(data)[:800])
+    log.info("[luxor] %s → 200: %s", path, str(data)[:800])
     return data
 
 
-def _today_params(tick: str = "1d", extra: dict | None = None) -> dict:
-    """Params for a query spanning today (MTD = first of month to today)."""
-    today     = date.today()
-    yesterday = today - timedelta(days=1)
-    params = {
-        "start_date":      yesterday.isoformat(),
-        "end_date":        today.isoformat(),
-        "tick_size":       tick,
-        "subaccount_names": SUBACCOUNTS,
-    }
+def _subaccount_params(extra: list[tuple] | None = None) -> list[tuple]:
+    """Subaccount names as repeated params — required by Luxor API."""
+    params = [("subaccount_names", s) for s in SUBACCOUNTS]
     if extra:
-        params.update(extra)
+        params.extend(extra)
     return params
 
 
-def _mtd_params(tick: str = "1d") -> dict:
-    today     = date.today()
-    month_start = today.replace(day=1)
-    return {
-        "start_date":      month_start.isoformat(),
-        "end_date":        today.isoformat(),
-        "tick_size":       tick,
-        "subaccount_names": SUBACCOUNTS,
-    }
+def _date_params(start: date, end: date, tick: str = "1d") -> list[tuple]:
+    return [
+        ("start_date", start.isoformat()),
+        ("end_date",   end.isoformat()),
+        ("tick_size",  tick),
+    ]
 
 
-# ── Data extraction ───────────────────────────────────────────────────────────
+# ── Extraction helpers ────────────────────────────────────────────────────────
 
-def _sum_field(data: dict | list, *keys: str) -> float:
-    """
-    Sum a numeric field across a list of records, or extract from a dict.
-    Handles both list responses and dict responses with a 'data' wrapper.
-    """
-    records = []
+def _find_list(data: dict | list) -> list:
     if isinstance(data, list):
-        records = data
-    elif isinstance(data, dict):
-        for wrapper in ("hashrate_efficiency", "data", "result", "workers",
-                        "pool_stats", "revenue", "items"):
-            inner = data.get(wrapper)
-            if isinstance(inner, list):
-                records = inner
-                break
-        if not records:
-            # flat dict — try direct keys
-            for key in keys:
-                val = data.get(key)
-                if val is not None:
+        return data
+    if isinstance(data, dict):
+        for key in ("hashrate_efficiency", "data", "result", "workers",
+                    "revenue", "items", "subaccounts"):
+            v = data.get(key)
+            if isinstance(v, list):
+                return v
+    return []
+
+
+def _sum_key(data: dict | list, *keys: str) -> float:
+    records = _find_list(data)
+    if not records:
+        # flat dict
+        if isinstance(data, dict):
+            for k in keys:
+                v = data.get(k)
+                if v is not None:
                     try:
-                        return float(val)
+                        return float(v)
                     except (TypeError, ValueError):
                         pass
-
+        return 0.0
     total = 0.0
     for rec in records:
         if not isinstance(rec, dict):
             continue
-        for key in keys:
-            val = rec.get(key)
-            if val is not None:
+        for k in keys:
+            v = rec.get(k)
+            if v is not None:
                 try:
-                    total += float(val)
+                    total += float(v)
                     break
                 except (TypeError, ValueError):
                     pass
     return total
 
 
-def _latest_field(data: dict | list, *keys: str) -> float:
-    """Return the value from the most recent record (last in list)."""
-    records = []
-    if isinstance(data, list):
-        records = data
-    elif isinstance(data, dict):
-        for wrapper in ("hashrate_efficiency", "data", "result", "workers",
-                        "pool_stats", "revenue", "items"):
-            inner = data.get(wrapper)
-            if isinstance(inner, list):
-                records = inner
-                break
-
-    # Try last record first (most recent), then first
+def _latest_key(data: dict | list, *keys: str) -> float:
+    records = _find_list(data)
     for rec in reversed(records):
         if not isinstance(rec, dict):
             continue
-        for key in keys:
-            val = rec.get(key)
-            if val is not None:
+        for k in keys:
+            v = rec.get(k)
+            if v is not None:
                 try:
-                    return float(val)
+                    return float(v)
                 except (TypeError, ValueError):
                     pass
     return 0.0
 
 
-# ── Fetch functions ───────────────────────────────────────────────────────────
+# ── Fetch ─────────────────────────────────────────────────────────────────────
 
-def _fetch_hashrate_efficiency_sync() -> dict | list:
-    """Confirmed working endpoint. Returns hashrate + efficiency history."""
-    params = _today_params(tick="1h")
-    return _get(f"/pool/hashrate-efficiency/{CURRENCY}", params)
-
-
-def _fetch_workers_sync() -> dict | list:
-    """Try known worker endpoint names."""
-    params = {"subaccount_names": SUBACCOUNTS}
-    for path in ("/pool/workers", "/pool/active-workers", "/pool/pool-stats"):
-        try:
-            return _get(path, params)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                continue
-            raise
-    return {}
-
-
-def _fetch_revenue_today_sync() -> dict | list:
-    """Try to get today's revenue."""
-    for path in ("/pool/revenue", "/pool/pool-stats", "/pool/summary"):
-        try:
-            return _get(path, _today_params())
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                continue
-            raise
-    return {}
-
-
-def _fetch_revenue_mtd_sync() -> dict | list:
-    """Try to get MTD revenue."""
-    for path in ("/pool/revenue", "/pool/pool-stats", "/pool/summary"):
-        try:
-            return _get(path, _mtd_params())
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                continue
-            raise
-    return {}
-
-
-# ── Main aggregation ──────────────────────────────────────────────────────────
-
-def _fetch_all_sync() -> MiningStats:
+def _fetch_sync() -> MiningStats:
     if not LUXOR_API_KEY:
         raise LuxorError("LUXOR_API_KEY is not set.")
 
-    # ── Hashrate + efficiency (confirmed working) ──────────────────────────
+    today       = date.today()
+    yesterday   = today - timedelta(days=1)
+    month_start = today.replace(day=1)
+
+    # ── Hashrate + efficiency (confirmed working endpoint) ─────────────────
     hr_ph      = 0.0
     efficiency = -1.0
     try:
-        eff_data = _fetch_hashrate_efficiency_sync()
-        # hashrate field is in H/s — convert to PH/s
-        raw_hr = _latest_field(eff_data, "hashrate", "avg_hashrate", "currentHashrate")
+        params = _date_params(yesterday, today, "1h") + _subaccount_params()
+        data   = _get(f"/pool/hashrate-efficiency/{CURRENCY}", params)
+        raw_hr = _latest_key(data, "hashrate", "avg_hashrate", "currentHashrate")
         hr_ph  = raw_hr / 1e15 if raw_hr else 0.0
-        raw_eff = _latest_field(eff_data, "efficiency", "hashrate_efficiency", "eff")
+        raw_eff = _latest_key(data, "efficiency", "hashrate_efficiency", "eff")
         if raw_eff:
             efficiency = raw_eff * 100 if raw_eff <= 1.0 else raw_eff
     except Exception as e:
-        log.warning("[luxor] hashrate-efficiency fetch failed: %s", e)
+        log.warning("[luxor] hashrate-efficiency failed: %s", e)
 
-    # ── Workers ───────────────────────────────────────────────────────────
+    # ── Workers — try subaccount-level and pool-level paths ───────────────
     workers = 0
-    try:
-        w_data  = _fetch_workers_sync()
-        workers = int(_latest_field(w_data, "active_workers", "activeWorkers",
-                                    "workers", "worker_count", "workerCount") or 0)
-    except Exception as e:
-        log.warning("[luxor] workers fetch failed: %s", e)
+    worker_paths = [
+        "/pool/get-active-workers",
+        "/pool/workers",
+        "/subaccounts/workers",
+        "/subaccounts/active-workers",
+    ]
+    for path in worker_paths:
+        try:
+            data    = _get(path, _subaccount_params())
+            workers = int(_sum_key(data, "active_workers", "activeWorkers",
+                                   "workers", "worker_count") or 0)
+            break
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                continue
+            log.warning("[luxor] workers %s failed: %s", path, e)
+            break
+        except Exception as e:
+            log.warning("[luxor] workers %s failed: %s", path, e)
+            break
 
-    # ── Revenue today ─────────────────────────────────────────────────────
+    # ── Revenue — try various paths with date params ───────────────────────
     btc_today = 0.0
-    try:
-        rev_today = _fetch_revenue_today_sync()
-        btc_today = _sum_field(rev_today, "revenue", "amount", "btc_amount",
-                               "total_revenue", "revenueToday", "daily_revenue")
-    except Exception as e:
-        log.warning("[luxor] revenue today fetch failed: %s", e)
-
-    # ── Revenue MTD ───────────────────────────────────────────────────────
-    btc_mtd = 0.0
-    try:
-        rev_mtd = _fetch_revenue_mtd_sync()
-        btc_mtd = _sum_field(rev_mtd, "revenue", "amount", "btc_amount",
-                              "total_revenue", "revenueMTD", "monthly_revenue")
-    except Exception as e:
-        log.warning("[luxor] revenue MTD fetch failed: %s", e)
+    btc_mtd   = 0.0
+    revenue_paths = [
+        "/pool/get-revenue",
+        "/subaccounts/revenue",
+        "/pool/hashrate-revenue",
+        "/pool/revenue-history",
+    ]
+    for path in revenue_paths:
+        try:
+            today_params = _date_params(yesterday, today) + _subaccount_params()
+            mtd_params   = _date_params(month_start, today) + _subaccount_params()
+            rev_today    = _get(path, today_params)
+            btc_today    = _sum_key(rev_today, "revenue", "amount", "btc_amount",
+                                    "total_revenue", "daily_revenue")
+            rev_mtd      = _get(path, mtd_params)
+            btc_mtd      = _sum_key(rev_mtd, "revenue", "amount", "btc_amount",
+                                    "total_revenue", "monthly_revenue")
+            break
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                continue
+            log.warning("[luxor] revenue %s failed: %s", path, e)
+            break
+        except Exception as e:
+            log.warning("[luxor] revenue %s failed: %s", path, e)
+            break
 
     log.info("[luxor] final → %.6f PH/s  %d workers  today=%.8f  mtd=%.8f  eff=%s",
              hr_ph, workers, btc_today, btc_mtd,
@@ -265,7 +226,7 @@ def _fetch_all_sync() -> MiningStats:
 
 
 async def get_mining_stats() -> MiningStats:
-    return await asyncio.to_thread(_fetch_all_sync)
+    return await asyncio.to_thread(_fetch_sync)
 
 
 # ── Formatting ────────────────────────────────────────────────────────────────
