@@ -188,26 +188,26 @@ async def cmd_watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if arg in ("news", "기사"):
         for company in _ALL_COMPANIES:
             db.subscribe(chat_id, company, "news")
-        if is_first:
-            await _seed_dedup_tables()
         msg = (
             "기사 알림이 모든 회사에 대해 활성화되었습니다. ✅"
             if lang == "ko" else
             "Subscribed to <b>News</b> alerts for all companies. ✅"
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+        if is_first:
+            ctx.application.create_task(_seed_dedup_tables())
 
     elif arg in ("disclosures", "disclosure", "공시"):
         for company in _DART_COMPANIES:
             db.subscribe(chat_id, company, "disclosures")
-        if is_first:
-            await _seed_dedup_tables()
         msg = (
             "공시 알림이 활성화되었습니다. ✅"
             if lang == "ko" else
             "Subscribed to <b>Disclosures</b> alerts. ✅"
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+        if is_first:
+            ctx.application.create_task(_seed_dedup_tables())
 
     elif arg in ("brief", "브리프"):
         db.subscribe(chat_id, "brief", "brief")
