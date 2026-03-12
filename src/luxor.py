@@ -61,12 +61,8 @@ def _get(path: str, params: list[tuple]) -> dict | list:
 
 
 def _sub_params(extra: list[tuple] | None = None) -> list[tuple]:
-    """
-    No subaccount_names filter — returns all subaccounts the API key has access to.
-    The 403 errors confirmed the hardcoded names don't match what the key can see.
-    We log the full response so we can identify the real subaccount names.
-    """
-    p = []
+    """Build repeated subaccount_names query params."""
+    p = [("subaccount_names", name) for name in SUBACCOUNTS]
     if extra:
         p.extend(extra)
     return p
@@ -143,13 +139,6 @@ def _fetch_sync() -> MiningStats:
     today       = date.today()
     yesterday   = today - timedelta(days=1)
     month_start = today.replace(day=1)
-
-    # ── DIAGNOSTIC: try /pool/workers/BTC with no filter to discover subaccount names ──
-    try:
-        diag = _get(f"/pool/workers/{CURRENCY}", [])
-        log.info("[luxor] DIAGNOSTIC workers (no filter): %s", str(diag)[:1500])
-    except Exception as e:
-        log.warning("[luxor] DIAGNOSTIC workers failed: %s", e)
 
     # ── /pool/summary/BTC — hashrate + active miners + 24h revenue ────────
     hr_ph      = 0.0
