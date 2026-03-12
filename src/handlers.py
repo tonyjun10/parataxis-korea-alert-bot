@@ -143,7 +143,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         text = (
             "<b>📖 도움말</b>\n\n"
             "• /start — 언어 선택\n"
-            "• /watch — 알림 구독\n"
+            "• /watch — 알림 구독 (인수 없으면 메뉴)\n"
             "• /watch news — 뉴스 알림 구독\n"
             "• /watch disclosures — 공시 알림 구독\n"
             "• /unwatch — 구독 취소\n"
@@ -158,7 +158,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         text = (
             "<b>📖 Help</b>\n\n"
             "• /start — Language selection\n"
-            "• /watch — Subscribe to alerts\n"
+            "• /watch — Subscribe to alerts (menu if no argument)\n"
             "• /watch news — Subscribe to news alerts\n"
             "• /watch disclosures — Subscribe to disclosure alerts\n"
             "• /unwatch — Unsubscribe\n"
@@ -359,6 +359,32 @@ async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"   Last seen: <code>{r['last_seen']}</code>"
         )
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+# ── /announcement (admin only) ───────────────────────────────────────────────
+
+async def cmd_announcement(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not _is_admin(user.id if user else None):
+        await update.message.reply_text("Command not recognized.")
+        return
+
+    msg = " ".join(ctx.args or []).strip()
+    if not msg:
+        await update.message.reply_text("Usage: /announcement <message>")
+        return
+
+    text = "📢 <b>Bot Announcement</b>\n\n" + msg
+    chat_ids = db.get_approved_chats()
+    sent = 0
+    for chat_id in chat_ids:
+        try:
+            await ctx.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
+            sent += 1
+        except Exception as exc:
+            log.warning("[announcement] failed to send to %s: %s", chat_id, exc)
+
+    await update.message.reply_text(f"✅ Announcement sent to {sent}/{len(chat_ids)} chats.")
 
 
 # ── Callback dispatcher ───────────────────────────────────────────────────────
