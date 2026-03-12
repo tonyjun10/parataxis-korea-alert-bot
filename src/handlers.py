@@ -18,7 +18,7 @@ from dart import get_disclosures
 from formatter import fmt_disclosures, fmt_news
 from keyboards import (
     kb_after_price, kb_after_result, kb_approval,
-    kb_category, kb_language, kb_main, kb_price,
+    kb_category, kb_language, kb_main, kb_price, kb_subscribe,
     kb_unwatch_categories, kb_watch_categories,
 )
 from news import get_news
@@ -387,7 +387,10 @@ async def cmd_announcement(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Command not recognized.")
         return
 
-    msg = " ".join(ctx.args or []).strip()
+    # Parse raw text to preserve newlines — ctx.args splits on all whitespace
+    raw   = (update.message.text or "").strip()
+    parts = raw.split(None, 1)          # split on first whitespace run
+    msg   = parts[1] if len(parts) > 1 else ""
     if not msg:
         await update.message.reply_text("Usage: /announcement <message>")
         return
@@ -565,6 +568,50 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML,
             disable_web_page_preview=True,
         )
+
+    # ── Subscribe menu ─────────────────────────────────────────────────
+    elif data == "menu:subscribe":
+        prompt = "구독할 항목을 선택하세요:" if lang == "ko" else "Choose what to subscribe to:"
+        await query.edit_message_text(
+            prompt, reply_markup=kb_subscribe(lang), parse_mode=ParseMode.HTML,
+        )
+
+    # ── Subscribe via menu buttons ──────────────────────────────────────
+    elif data.startswith("sub:"):
+        topic    = data.split(":", 1)[1]
+        is_first = not db.has_any_subscription(chat_id)
+        db.log_event("click", user.id, user.username, chat_id, data)
+
+        if topic == "all":
+            db.subscribe_default(chat_id)
+            db.subscribe(chat_id, "brief",  "brief")
+            db.subscribe(chat_id, "mining", "mining")
+            db.subscribe(chat_id, "daily",  "daily")
+            msg = "모든 항목 구독이 활성화되었습니다. ✅" if lang == "ko" else "Subscribed to everything. ✅"
+        elif topic in ("parataxis", "bitmax", "bitplanet", "microstrategy"):
+            db.subscribe(chat_id, topic, "news")
+            if topic != "microstrategy":
+                db.subscribe(chat_id, topic, "disclosures")
+            label = {"parataxis": "Parataxis Korea", "bitmax": "Bitmax",
+                     "bitplanet": "Bitplanet", "microstrategy": "Strategy"}[topic]
+            msg = f"{label} 알림이 활성화되었습니다. ✅" if lang == "ko" else f"Subscribed to <b>{label}</b> alerts. ✅"
+        elif topic == "brief":
+            db.subscribe(chat_id, "brief", "brief")
+            msg = "가격 업데이트 구독이 활성화되었습니다. ✅" if lang == "ko" else "Subscribed to <b>Price Updates</b> (Daily Market Brief). ✅"
+        elif topic == "mining":
+            db.subscribe(chat_id, "mining", "mining")
+            msg = "채굴 현황 알림이 활성화되었습니다. ✅" if lang == "ko" else "Subscribed to <b>Mining Updates</b>. ✅"
+        elif topic == "daily":
+            db.subscribe(chat_id, "daily", "daily")
+            msg = "데일리 스냅샷 구독이 활성화되었습니다. ✅" if lang == "ko" else "Subscribed to <b>Daily Snapshot</b>. ✅"
+        else:
+            msg = "알 수 없는 항목입니다." if lang == "ko" else "Unknown subscription topic."
+
+        if is_first and topic in ("all", "parataxis", "bitmax", "bitplanet", "microstrategy"):
+            await query.edit_message_text("⏳ Setting up alerts…")
+            await _seed_dedup_tables()
+
+        await query.edit_message_text(msg, parse_mode=ParseMode.HTML)
 
     # ── Watch via buttons ───────────────────────────────────────────────
     elif data.startswith("watch:"):
