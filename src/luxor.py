@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 LUXOR_API_KEY = os.environ.get("LUXOR_API_KEY", "")
 BASE_URL      = "https://app.luxor.tech/api/v2"
-SUBACCOUNTS   = ["blackcreek", "blackcreekluxoos"]
+SUBACCOUNTS   = ["blackcreek", "blackcreekluxos"]
 CURRENCY      = "BTC"
 TIMEOUT       = 15
 
@@ -144,8 +144,14 @@ def _fetch_sync() -> MiningStats:
     yesterday   = today - timedelta(days=1)
     month_start = today.replace(day=1)
 
+    # ── DIAGNOSTIC: try /pool/workers/BTC with no filter to discover subaccount names ──
+    try:
+        diag = _get(f"/pool/workers/{CURRENCY}", [])
+        log.info("[luxor] DIAGNOSTIC workers (no filter): %s", str(diag)[:1500])
+    except Exception as e:
+        log.warning("[luxor] DIAGNOSTIC workers failed: %s", e)
+
     # ── /pool/summary/BTC — hashrate + active miners + 24h revenue ────────
-    # No date params needed; subaccount_names optional
     hr_ph      = 0.0
     efficiency = -1.0
     btc_today  = 0.0
