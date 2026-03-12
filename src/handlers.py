@@ -143,26 +143,30 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         text = (
             "<b>📖 도움말</b>\n\n"
             "• /start — 언어 선택\n"
-            "• /watch — 알림 구독 (인수 없으면 메뉴)\n"
+            "• /watch — 알림 구독\n"
             "• /watch news — 뉴스 알림 구독\n"
             "• /watch disclosures — 공시 알림 구독\n"
             "• /unwatch — 구독 취소\n"
             "• /status — 구독 상태 확인\n"
             "• /watch brief — 데일리 브리프 구독\n"
             "• /brief — 지금 브리프 보기\n"
+            "• /watch mining — 채굴 현황 알림 구독\n"
+            "• /mining — 채굴 현황 보기\n"
             "• /help — 이 도움말"
         )
     else:
         text = (
             "<b>📖 Help</b>\n\n"
             "• /start — Language selection\n"
-            "• /watch — Subscribe to alerts (menu if no argument)\n"
+            "• /watch — Subscribe to alerts\n"
             "• /watch news — Subscribe to news alerts\n"
             "• /watch disclosures — Subscribe to disclosure alerts\n"
             "• /unwatch — Unsubscribe\n"
             "• /status — Check subscription status\n"
             "• /watch brief — Subscribe to daily market brief\n"
             "• /brief — Get the brief right now\n"
+            "• /watch mining — Subscribe to mining updates\n"
+            "• /mining — Get mining stats right now\n"
             "• /help — This message"
         )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
