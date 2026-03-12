@@ -39,6 +39,7 @@ class MiningStats:
     btc_today:      float
     btc_mtd:        float
     efficiency:     float  # -1 if unavailable
+    last_updated:   str    = ""  # KST timestamp string
 
 
 # ── HTTP ──────────────────────────────────────────────────────────────────────
@@ -201,12 +202,16 @@ def _fetch_sync() -> MiningStats:
              hr_ph, workers, btc_today, btc_mtd,
              f"{efficiency:.1f}%" if efficiency >= 0 else "n/a")
 
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    ts = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST")
     return MiningStats(
         hashrate_ph    = hr_ph,
         active_workers = workers,
         btc_today      = btc_today,
         btc_mtd        = btc_mtd,
         efficiency     = efficiency,
+        last_updated   = ts,
     )
 
 
@@ -217,21 +222,26 @@ async def get_mining_stats() -> MiningStats:
 # ── Formatting ────────────────────────────────────────────────────────────────
 
 def fmt_mining_stats(stats: MiningStats, lang: str = "en") -> str:
-    eff_str = f"{stats.efficiency:.1f}%" if stats.efficiency >= 0 else "N/A"
+    from datetime import date
+    eff_str  = f"{stats.efficiency:.1f}%" if stats.efficiency >= 0 else "N/A"
+    updated  = f"\n<i>Updated: {stats.last_updated}</i>" if stats.last_updated else ""
+    month_start = date.today().replace(day=1).strftime("%b %-d")
     if lang == "ko":
         return (
             "⚡ <b>채굴 현황</b>\n\n"
             f"플릿 해시레이트: <b>{stats.hashrate_ph:.4f} PH/s</b>\n"
             f"활성 워커: <b>{stats.active_workers}</b>\n"
             f"오늘 채굴 BTC: <b>{stats.btc_today:.8f} BTC</b>\n"
-            f"이번 달 채굴 BTC: <b>{stats.btc_mtd:.8f} BTC</b>\n"
+            f"이번 달 채굴 BTC ({month_start}~): <b>{stats.btc_mtd:.8f} BTC</b>\n"
             f"효율: <b>{eff_str}</b>"
+            + updated
         )
     return (
         "⚡ <b>Mining Update</b>\n\n"
         f"Fleet Hashrate: <b>{stats.hashrate_ph:.4f} PH/s</b>\n"
         f"Active Workers: <b>{stats.active_workers}</b>\n"
         f"BTC Mined Today: <b>{stats.btc_today:.8f} BTC</b>\n"
-        f"BTC Mined MTD: <b>{stats.btc_mtd:.8f} BTC</b>\n"
+        f"BTC Mined MTD (since {month_start}): <b>{stats.btc_mtd:.8f} BTC</b>\n"
         f"Efficiency: <b>{eff_str}</b>"
+        + updated
     )
