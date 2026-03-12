@@ -108,21 +108,8 @@ def _fetch_article_text(url: str) -> str | None:
 
 def summarize_article(url: str, target_lang: str) -> str | None:
     """
-    Fetch article and generate a short summary in target_lang.
-    Returns summary string, or None if fetch/summarization fails.
-    Failures are silent — callers just skip the summary.
+    Phase 2 — disabled for now.
+    Google News URLs redirect to consent pages so article extraction fails.
+    Returns None always so alerts fall back to title-only.
     """
-    article_text = _fetch_article_text(url)
-    if not article_text:
-        return None
-
-    lang_name = "English" if target_lang == "en" else "Korean"
-    prompt = (
-        f"Summarize the following news article in {lang_name} in {MAX_SUMMARY_WORDS} words or fewer. "
-        f"Be factual and concise. Return ONLY the summary, nothing else.\n\n"
-        f"Article text:\n{article_text}"
-    )
-    result = _claude(prompt, max_tokens=200)
-    if result:
-        log.info("[translate] summary generated (%s, %d chars)", target_lang, len(result))
-    return result
+    return None
