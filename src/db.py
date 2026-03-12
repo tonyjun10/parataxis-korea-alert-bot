@@ -553,7 +553,7 @@ def get_recent_users(limit: int = 20) -> list:
         cur = _execute(conn,
             f"SELECT username, user_id, MAX(timestamp) AS last_seen"
             f" FROM audit_log WHERE user_id IS NOT NULL"
-            f" GROUP BY user_id ORDER BY last_seen DESC LIMIT {_p()}",
+            f" GROUP BY user_id, username ORDER BY last_seen DESC LIMIT {_p()}",
             (limit,))
         return _fetchall(cur)
     finally:
