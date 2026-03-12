@@ -25,6 +25,7 @@ from formatter import fmt_disclosures, fmt_news
 from news import get_news
 from brief import BriefError, take_screenshot_with_timeout
 from luxor import LuxorError, fmt_mining_stats, get_mining_stats
+from prices import fmt_stock_price, get_stock_price_krw, PARATAXIS_TICKER
 from translate import summarize_article, translate_title
 
 log  = logging.getLogger(__name__)
@@ -66,6 +67,14 @@ def register_jobs(app: Application, interval_minutes: int = 10):
         name="daily_brief",
     )
     log.info("Daily brief job registered — 10:00 KST.")
+
+    # Daily snapshot — 9:00 KST every day
+    app.job_queue.run_daily(
+        _daily_job,
+        time=dt_time(hour=9, minute=0, second=0, tzinfo=SEOUL),
+        name="daily_snapshot",
+    )
+    log.info("Daily snapshot job registered — 9:00 KST.")
 
     # Mining update — every 10 min alongside monitor
     app.job_queue.run_repeating(
@@ -451,3 +460,87 @@ async def _mining_job(context) -> None:
 
     log.info("[mining] alerted %d chat(s)", alerted)
     log.info("── MINING JOB COMPLETE ──")
+
+
+# ── Daily snapshot job ─────────────────────────────────────────────────────────
+
+async def _daily_job(context) -> None:
+    """
+    Runs at 9:00 KST daily. Sends brief screenshot + mining stats + stock price
+    to all /watch daily subscribers.
+    """
+    bot: Bot = context.bot
+    now_str  = datetime.now(SEOUL).strftime("%Y-%m-%d %H:%M:%S KST")
+    log.info("── DAILY JOB START  %s ──", now_str)
+
+    chats = db.get_chats_for("daily", "daily")
+    log.info("[daily] subscribed chats: %d", len(chats))
+    if not chats:
+        log.info("[daily] no subscribers — skipping.")
+        return
+
+    # Partition by language; take one screenshot per language
+    en_chats = [c for c in chats if c.get("lang", "en") != "ko"]
+    ko_chats = [c for c in chats if c.get("lang", "en") == "ko"]
+
+    screenshots: dict[str, bytes | None] = {"en": None, "ko": None}
+    for lang, group in (("en", en_chats), ("ko", ko_chats)):
+        if not group:
+            continue
+        try:
+            screenshots[lang] = await take_screenshot_with_timeout(lang)
+            log.info("[daily/%s] screenshot captured (%d bytes)", lang, len(screenshots[lang]))
+        except BriefError as exc:
+            log.error("[daily/%s] screenshot failed: %s", lang, exc)
+
+    # Fetch mining stats and stock price once for all chats
+    try:
+        stats = await get_mining_stats()
+    except LuxorError as exc:
+        log.error("[daily] mining fetch failed: %s", exc)
+        stats = None
+
+    try:
+        stock = await get_stock_price_krw(PARATAXIS_TICKER)
+    except Exception as exc:
+        log.error("[daily] stock fetch failed: %s", exc)
+        stock = None
+
+    date_str = datetime.now(SEOUL).strftime("%Y-%m-%d")
+    alerted = 0
+
+    for chat in chats:
+        chat_id = chat["chat_id"]
+        lang    = chat.get("lang", "en")
+        png     = screenshots.get(lang)
+
+        # 1. Brief screenshot
+        if png:
+            caption = (
+                f"📊 데일리 마켓 대시보드 — {date_str}"
+                if lang == "ko" else
+                f"📊 Daily Market Dashboard — {date_str}"
+            )
+            await _send_photo(bot, chat_id, png, caption)
+        else:
+            err = "⚠️ 오늘의 대시보드 스크린샷을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not capture today's dashboard screenshot."
+            await _send(bot, chat_id, err)
+
+        # 2. Mining stats
+        if stats:
+            await _send(bot, chat_id, fmt_mining_stats(stats, lang))
+        else:
+            err = "⚠️ 채굴 데이터를 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not fetch mining stats."
+            await _send(bot, chat_id, err)
+
+        # 3. Stock price
+        if stock:
+            await _send(bot, chat_id, fmt_stock_price(stock, lang))
+        else:
+            err = "⚠️ 주가를 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not fetch stock price."
+            await _send(bot, chat_id, err)
+
+        alerted += 1
+
+    log.info("[daily] delivered to %d chat(s)", alerted)
+    log.info("── DAILY JOB COMPLETE ──")
