@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 API_URL           = "https://api.anthropic.com/v1/messages"
-MODEL             = "claude-haiku-3-5-20241022"
+MODEL             = "claude-haiku-4-5-20251001"  # correct Anthropic native API model string
 TIMEOUT           = 10   # seconds — keep alerts snappy
 FETCH_TIMEOUT     = 8    # seconds for article fetch
 MAX_ARTICLE_CHARS = 4000 # truncate before sending to Claude
@@ -48,7 +48,10 @@ def _claude(prompt: str, max_tokens: int = 200) -> str | None:
         r.raise_for_status()
         return r.json()["content"][0]["text"].strip()
     except httpx.HTTPStatusError as exc:
-        log.warning("[translate] Claude API %d: %s", exc.response.status_code, exc.response.text[:300])
+        log.warning("[translate] Claude API %d: %s", exc.response.status_code, exc.response.text[:500])
+        return None
+    except Exception as exc:
+        log.warning("[translate] Claude API call failed: %s", exc)
         return None
 
 
