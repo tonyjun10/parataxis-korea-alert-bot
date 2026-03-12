@@ -25,6 +25,7 @@ from formatter import fmt_disclosures, fmt_news
 from news import get_news
 from brief import BriefError, take_screenshot_with_timeout
 from luxor import LuxorError, fmt_mining_stats, get_mining_stats
+from translate import summarize_article, translate_title
 
 log  = logging.getLogger(__name__)
 SEOUL = ZoneInfo("Asia/Seoul")
@@ -215,21 +216,90 @@ async def _check_news(bot: Bot, company: str) -> int:
     new_items.sort(key=_news_key, reverse=True)
     best = new_items[0]
 
+    # ── Translate title + optional summary (done once, reused for all chats) ──
+    original_title = best.get("title", "")
+    url            = best.get("url", "")
+    publisher      = best.get("publisher", "")
+    time_str       = best.get("time", "")
+
+    translated: dict[str, str | None] = {}
+    summaries:  dict[str, str | None] = {}
+
+    for lang_code in ("en", "ko"):
+        translated[lang_code] = await asyncio.to_thread(
+            translate_title, original_title, lang_code
+        )
+        summaries[lang_code] = await asyncio.to_thread(
+            summarize_article, url, lang_code
+        )
+
     alerted = 0
     for chat in chats:
         chat_id = chat["chat_id"]
         lang    = chat.get("lang", "en")
         label   = _label(company, lang)
-        header  = (
-            f"🔔 <b>새 기사 — {label}</b>\n\n"
-            if lang == "ko" else
-            f"🔔 <b>New News — {label}</b>\n\n"
+
+        msg = _fmt_news_alert(
+            lang=lang,
+            label=label,
+            original_title=original_title,
+            translated_title=translated.get(lang),
+            publisher=publisher,
+            time_str=time_str,
+            url=url,
+            summary=summaries.get(lang),
         )
-        if await _send(bot, chat_id, header + fmt_news([best], lang)):
+        if await _send(bot, chat_id, msg):
             alerted += 1
 
     log.info("[news/%s] alerted: %d chat(s)", company, alerted)
     return alerted
+
+
+# ── News alert formatter (with translation + optional summary) ────────────────
+
+def _fmt_news_alert(
+    lang: str,
+    label: str,
+    original_title: str,
+    translated_title: str | None,
+    publisher: str,
+    time_str: str,
+    url: str,
+    summary: str | None,
+) -> str:
+    from html import escape
+
+    if lang == "ko":
+        header     = f"🔔 <b>새 기사 — {label}</b>"
+        orig_label = "원본 제목"
+        xlat_label = "한국어 제목"
+    else:
+        header     = f"🔔 <b>New News — {label}</b>"
+        orig_label = "Original Title"
+        xlat_label = "English Title"
+
+    lines = [header, ""]
+    lines.append(f"{orig_label}: {escape(original_title)}")
+
+    if translated_title and translated_title.strip() != original_title.strip():
+        lines.append(f"{xlat_label}: {escape(translated_title)}")
+
+    if publisher:
+        pub_label = "출처" if lang == "ko" else "Source"
+        lines.append(f"{pub_label}: {escape(publisher)}")
+
+    if time_str:
+        lines.append(f"🕐 {time_str}")
+
+    if summary:
+        sum_label = "요약" if lang == "ko" else "Summary"
+        lines.append(f"\n📝 <b>{sum_label}:</b> {escape(summary)}")
+
+    lines.append(f"\n🔗 <a href=\"{url}\">기사 보기</a>" if lang == "ko"
+                 else f"\n🔗 <a href=\"{url}\">Read Article</a>")
+
+    return "\n".join(lines)
 
 
 # ── Send helper ────────────────────────────────────────────────────────────────
