@@ -41,6 +41,7 @@ from handlers import (
     cmd_announcement,
     cmd_audit,
     cmd_brief,
+    cmd_daily,
     cmd_mining,
     cmd_help,
     cmd_start,
@@ -88,6 +89,7 @@ def main():
     app.add_handler(CommandHandler("users",   cmd_users))
     app.add_handler(CommandHandler("brief",   cmd_brief))
     app.add_handler(CommandHandler("mining",  cmd_mining))
+    app.add_handler(CommandHandler("daily",   cmd_daily))
     app.add_handler(CommandHandler("announcement", cmd_announcement))
 
     # ── Callback (inline buttons) ──────────────────────────────────────────────
