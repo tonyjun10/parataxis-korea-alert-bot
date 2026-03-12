@@ -152,6 +152,8 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• /brief — 지금 브리프 보기\n"
             "• /watch mining — 채굴 현황 알림 구독\n"
             "• /mining — 채굴 현황 보기\n"
+            "• /watch daily — 데일리 스냅샷 구독\n"
+            "• /daily — 데일리 스냅샷 보기\n"
             "• /help — 이 도움말"
         )
     else:
@@ -167,6 +169,8 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• /brief — Get the brief right now\n"
             "• /watch mining — Subscribe to mining updates\n"
             "• /mining — Get mining stats right now\n"
+            "• /watch daily — Subscribe to daily snapshot\n"
+            "• /daily — Get daily snapshot right now\n"
             "• /help — This message"
         )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
@@ -231,11 +235,20 @@ async def cmd_watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
+    elif arg in ("daily", "데일리"):
+        db.subscribe(chat_id, "daily", "daily")
+        msg = (
+            "데일리 스냅샷 구독이 활성화되었습니다. 매일 오전 9시에 받으실 수 있습니다. ✅"
+            if lang == "ko" else
+            "Subscribed to the <b>Daily Snapshot</b>. You'll receive it every day at 9:00 KST. ✅"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
     else:
         msg = (
-            "사용법: /watch news | disclosures | brief | mining"
+            "사용법: /watch news | disclosures | brief | mining | daily"
             if lang == "ko" else
-            "Usage: /watch news | disclosures | brief | mining"
+            "Usage: /watch news | disclosures | brief | mining | daily"
         )
         await update.message.reply_text(msg)
 
@@ -268,6 +281,8 @@ async def cmd_unwatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
     elif arg in ("mining", "채굴"):
         db.unsubscribe(chat_id, company="mining", category="mining")
+    elif arg in ("daily", "데일리"):
+        db.unsubscribe(chat_id, company="daily", category="daily")
         msg = (
             "채굴 현황 알림이 해제되었습니다. 🔕"
             if lang == "ko" else
@@ -316,6 +331,9 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if by_company.get("mining"):
         mining_label = "채굴 현황 알림" if lang == "ko" else "Mining Updates"
         lines.append(f"✅ <b>{mining_label}</b>")
+    if by_company.get("daily"):
+        daily_label = "데일리 스냅샷 (매일 오전 9시)" if lang == "ko" else "Daily Snapshot (9:00 KST daily)"
+        lines.append(f"✅ <b>{daily_label}</b>")
 
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
@@ -752,3 +770,53 @@ async def cmd_mining(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     await sent.edit_text(fmt_mining_stats(stats, lang), parse_mode=ParseMode.HTML)
+
+
+# ── /daily ─────────────────────────────────────────────────────────────────────
+
+async def cmd_daily(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Combined daily snapshot: brief graphic + mining stats + stock price."""
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+    lang    = db.get_lang(chat_id)
+
+    if not _is_admin(user.id) and not db.is_approved(chat_id):
+        await update.message.reply_text("🔒 Access restricted.")
+        return
+
+    db.log_event("daily", user.id, user.username, chat_id)
+    wait_msg = "⏳ 데일리 스냅샷 준비 중…" if lang == "ko" else "⏳ Preparing daily snapshot…"
+    sent = await update.message.reply_text(wait_msg)
+    await sent.delete()
+
+    # 1. Brief screenshot
+    try:
+        png_bytes = await take_screenshot_with_timeout(lang)
+        caption = (
+            f"📊 데일리 마켓 대시보드 — {__import__('datetime').date.today().strftime('%Y-%m-%d')}"
+            if lang == "ko" else
+            f"📊 Daily Market Dashboard — {__import__('datetime').date.today().strftime('%Y-%m-%d')}"
+        )
+        await update.message.reply_photo(photo=png_bytes, caption=caption)
+    except BriefError as exc:
+        log.error("cmd_daily brief error: %s", exc)
+        err = "⚠️ 스크린샷을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not capture dashboard screenshot."
+        await update.message.reply_text(err)
+
+    # 2. Mining stats
+    try:
+        stats = await get_mining_stats()
+        await update.message.reply_text(fmt_mining_stats(stats, lang), parse_mode=ParseMode.HTML)
+    except LuxorError as exc:
+        log.error("cmd_daily mining error: %s", exc)
+        err = "⚠️ 채굴 데이터를 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not fetch mining stats."
+        await update.message.reply_text(err)
+
+    # 3. Stock price
+    try:
+        result = await get_stock_price_krw(PARATAXIS_TICKER)
+        await update.message.reply_text(fmt_stock_price(result, lang), parse_mode=ParseMode.HTML)
+    except Exception as exc:
+        log.error("cmd_daily stock error: %s", exc)
+        err = "⚠️ 주가를 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not fetch stock price."
+        await update.message.reply_text(err)
