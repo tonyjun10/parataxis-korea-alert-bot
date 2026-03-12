@@ -16,9 +16,10 @@ import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+import os
 from zoneinfo import ZoneInfo
 
-DB_PATH = Path("data/bot.db")
+DB_PATH = Path(os.environ.get("DB_PATH", "data/bot.db"))
 SEOUL   = ZoneInfo("Asia/Seoul")
 log     = logging.getLogger(__name__)
 
