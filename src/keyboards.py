@@ -31,6 +31,7 @@ def kb_main(lang: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("📁 비트플래닛",       callback_data="company:bitplanet")],
             [InlineKeyboardButton("📁 스트래티지",       callback_data="company:microstrategy")],
             [InlineKeyboardButton("💰 가격",             callback_data="menu:price")],
+            [InlineKeyboardButton("🔔 구독 관리",        callback_data="menu:subscribe")],
         ]
     else:
         rows = [
@@ -39,6 +40,7 @@ def kb_main(lang: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("📁 Bitplanet",       callback_data="company:bitplanet")],
             [InlineKeyboardButton("📁 Strategy",        callback_data="company:microstrategy")],
             [InlineKeyboardButton("💰 Price",           callback_data="menu:price")],
+            [InlineKeyboardButton("🔔 Subscribe",       callback_data="menu:subscribe")],
         ]
     return InlineKeyboardMarkup(rows)
 
@@ -139,6 +141,41 @@ def kb_after_price(lang: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton("⬅️ Back", callback_data="menu:price"),
             InlineKeyboardButton("🏠 Home", callback_data="nav:home"),
         ]]
+    return InlineKeyboardMarkup(rows)
+
+
+# ── Subscribe menu keyboard ───────────────────────────────────────────────────
+
+def kb_subscribe(lang: str) -> InlineKeyboardMarkup:
+    """Subscription management menu accessible from the main menu."""
+    nav = [
+        InlineKeyboardButton("⬅️ 뒤로" if lang == "ko" else "⬅️ Back", callback_data="nav:main"),
+        InlineKeyboardButton("🏠 Home",  callback_data="nav:home"),
+    ]
+    if lang == "ko":
+        rows = [
+            [InlineKeyboardButton("✅ 전체 구독",               callback_data="sub:all")],
+            [InlineKeyboardButton("📁 파라택시스 코리아",        callback_data="sub:parataxis")],
+            [InlineKeyboardButton("📁 비트맥스",                callback_data="sub:bitmax")],
+            [InlineKeyboardButton("📁 비트플래닛",              callback_data="sub:bitplanet")],
+            [InlineKeyboardButton("📁 스트래티지",              callback_data="sub:microstrategy")],
+            [InlineKeyboardButton("💰 가격 업데이트",           callback_data="sub:brief")],
+            [InlineKeyboardButton("⚡ 채굴 현황",               callback_data="sub:mining")],
+            [InlineKeyboardButton("📅 데일리 스냅샷",           callback_data="sub:daily")],
+            nav,
+        ]
+    else:
+        rows = [
+            [InlineKeyboardButton("✅ All",               callback_data="sub:all")],
+            [InlineKeyboardButton("📁 Parataxis Korea",   callback_data="sub:parataxis")],
+            [InlineKeyboardButton("📁 Bitmax",            callback_data="sub:bitmax")],
+            [InlineKeyboardButton("📁 Bitplanet",         callback_data="sub:bitplanet")],
+            [InlineKeyboardButton("📁 Strategy",          callback_data="sub:microstrategy")],
+            [InlineKeyboardButton("💰 Price Updates",     callback_data="sub:brief")],
+            [InlineKeyboardButton("⚡ Mining",            callback_data="sub:mining")],
+            [InlineKeyboardButton("📅 Daily Snapshot",    callback_data="sub:daily")],
+            nav,
+        ]
     return InlineKeyboardMarkup(rows)
 
 
