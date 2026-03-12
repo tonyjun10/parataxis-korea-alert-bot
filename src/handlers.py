@@ -228,12 +228,12 @@ async def cmd_watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
     else:
-        prompt = "구독할 카테고리를 선택하세요:" if lang == "ko" else "Select what to subscribe to:"
-        await update.message.reply_text(
-            prompt,
-            reply_markup=kb_watch_categories(lang),
-            parse_mode=ParseMode.HTML,
+        msg = (
+            "사용법: /watch news | disclosures | brief | mining"
+            if lang == "ko" else
+            "Usage: /watch news | disclosures | brief | mining"
         )
+        await update.message.reply_text(msg)
 
 
 # ── /unwatch ──────────────────────────────────────────────────────────────────
