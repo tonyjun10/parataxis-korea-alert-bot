@@ -38,6 +38,7 @@ from telegram.ext import (
 import db
 from handlers import (
     callback_handler,
+    cmd_announcement,
     cmd_audit,
     cmd_brief,
     cmd_mining,
@@ -87,6 +88,7 @@ def main():
     app.add_handler(CommandHandler("users",   cmd_users))
     app.add_handler(CommandHandler("brief",   cmd_brief))
     app.add_handler(CommandHandler("mining",  cmd_mining))
+    app.add_handler(CommandHandler("announcement", cmd_announcement))
 
     # ── Callback (inline buttons) ──────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(callback_handler))
