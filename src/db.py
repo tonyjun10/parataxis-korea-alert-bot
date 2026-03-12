@@ -265,6 +265,16 @@ def get_pending_requests() -> list[dict]:
         conn.close()
 
 
+def get_approved_chats() -> list[int]:
+    """Return list of all approved chat_ids."""
+    conn = get_conn()
+    try:
+        cur = _execute(conn, "SELECT chat_id FROM approved_chats WHERE approved=1")
+        return [row["chat_id"] for row in _fetchall(cur)]
+    finally:
+        conn.close()
+
+
 # ── Subscriptions ──────────────────────────────────────────────────────────────
 
 def subscribe(chat_id: int, company: str, category: str):
