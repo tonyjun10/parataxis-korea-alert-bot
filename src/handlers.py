@@ -281,12 +281,18 @@ async def cmd_unwatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
     elif arg in ("mining", "채굴"):
         db.unsubscribe(chat_id, company="mining", category="mining")
-    elif arg in ("daily", "데일리"):
-        db.unsubscribe(chat_id, company="daily", category="daily")
         msg = (
             "채굴 현황 알림이 해제되었습니다. 🔕"
             if lang == "ko" else
             "Unsubscribed from <b>Mining Updates</b>. 🔕"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    elif arg in ("daily", "데일리"):
+        db.unsubscribe(chat_id, company="daily", category="daily")
+        msg = (
+            "데일리 스냅샷 구독이 해제되었습니다. 🔕"
+            if lang == "ko" else
+            "Unsubscribed from <b>Daily Snapshot</b>. 🔕"
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
     elif arg in ("all", "전체"):
