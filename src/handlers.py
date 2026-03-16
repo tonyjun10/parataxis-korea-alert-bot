@@ -954,27 +954,3 @@ async def cmd_daily(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         log.error("cmd_daily brief error: %s", exc)
         err = "⚠️ 스크린샷을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not capture dashboard screenshot."
         await update.message.reply_text(err)
-
-    # 3. Mining stats (detailed)
-    if stats_result and not isinstance(stats_result, Exception):
-        await update.message.reply_text(fmt_mining_stats(stats_result, lang), parse_mode=ParseMode.HTML)
-    else:
-        try:
-            stats_result = await get_mining_stats()
-            await update.message.reply_text(fmt_mining_stats(stats_result, lang), parse_mode=ParseMode.HTML)
-        except LuxorError as exc:
-            log.error("cmd_daily mining retry error: %s", exc)
-            err = "⚠️ 채굴 데이터를 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not fetch mining stats."
-            await update.message.reply_text(err)
-
-    # 4. Stock price (detailed)
-    if stock_result and not isinstance(stock_result, Exception) and "error" not in stock_result:
-        await update.message.reply_text(fmt_stock_price(stock_result, lang), parse_mode=ParseMode.HTML)
-    else:
-        try:
-            stock_result = await get_stock_price_krw(PARATAXIS_TICKER)
-            await update.message.reply_text(fmt_stock_price(stock_result, lang), parse_mode=ParseMode.HTML)
-        except Exception as exc:
-            log.error("cmd_daily stock retry error: %s", exc)
-            err = "⚠️ 주가를 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not fetch stock price."
-            await update.message.reply_text(err)
