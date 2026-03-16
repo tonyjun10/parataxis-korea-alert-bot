@@ -22,7 +22,7 @@ from keyboards import (
     kb_unwatch_categories, kb_watch_categories,
 )
 from news import get_news
-from prices import fmt_price, fmt_stock_price, get_price, get_stock_price_krw, PARATAXIS_TICKER
+from prices import fmt_price, fmt_stock_price, get_price, get_price_usd, get_stock_price_krw, PARATAXIS_TICKER
 from brief import BriefError, take_screenshot_with_timeout
 from luxor import LuxorError, fmt_mining_stats, get_mining_stats
 
@@ -821,8 +821,87 @@ async def cmd_mining(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── /daily ─────────────────────────────────────────────────────────────────────
 
+def _fmt_daily_header(
+    lang: str,
+    date_str: str,
+    time_str: str,
+    btc: dict | None,
+    stock: dict | None,
+    stats,           # MiningStats | None
+) -> str:
+    """Build the executive summary header for /daily."""
+
+    # BTC price
+    if btc and "error" not in btc:
+        btc_price = btc["price"]
+        if btc.get("currency", "USD") == "KRW":
+            btc_str = f"₩{btc_price:,.0f}"
+        else:
+            btc_str = f"${btc_price:,.0f}"
+    else:
+        btc_str = "N/A"
+
+    # Stock price
+    if stock and "error" not in stock:
+        s_price  = stock["price"]
+        s_change = stock.get("change", 0)
+        s_pct    = stock.get("change_pct", "0")
+        arrow    = "▲" if s_change > 0 else ("▼" if s_change < 0 else "—")
+        stock_str  = f"₩{s_price:,.0f}"
+        change_str = f"{arrow} ₩{abs(s_change):,.0f} ({s_pct}%)"
+    else:
+        stock_str  = "N/A"
+        change_str = ""
+
+    # Mining stats
+    if stats:
+        hr_str      = f"{stats.hashrate_ph:.2f} PH/s"
+        workers_str = str(stats.active_workers)
+        today_str   = f"{stats.btc_today:.8f} BTC"
+        mtd_str     = f"{stats.btc_mtd:.8f} BTC"
+    else:
+        hr_str = workers_str = today_str = mtd_str = "N/A"
+
+    from datetime import date
+    month_start = date.today().replace(day=1).strftime("%b %-d")
+
+    if lang == "ko":
+        lines = [
+            f"<b>📊 파라택시스 데일리 스냅샷 — {date_str} ({time_str} KST)</b>",
+            "",
+            "<b>시장</b>",
+            f"• BTC: <b>{btc_str}</b>",
+            f"• 파라택시스 코리아: <b>{stock_str}</b>" + (f"  {change_str}" if change_str else ""),
+            "",
+            "<b>채굴</b>",
+            f"• 플릿 해시레이트: <b>{hr_str}</b>",
+            f"• 활성 워커: <b>{workers_str}</b>",
+            f"• 오늘 채굴: <b>{today_str}</b>",
+            f"• 이번 달 채굴 ({month_start}~): <b>{mtd_str}</b>",
+            "",
+            "대시보드 및 상세 지표는 아래를 확인하세요 ↓",
+        ]
+    else:
+        lines = [
+            f"<b>📊 Parataxis Daily Snapshot — {date_str} ({time_str} KST)</b>",
+            "",
+            "<b>Market</b>",
+            f"• BTC: <b>{btc_str}</b>",
+            f"• Parataxis Korea: <b>{stock_str}</b>" + (f"  {change_str}" if change_str else ""),
+            "",
+            "<b>Mining</b>",
+            f"• Fleet Hashrate: <b>{hr_str}</b>",
+            f"• Active Workers: <b>{workers_str}</b>",
+            f"• BTC Today: <b>{today_str}</b>",
+            f"• BTC MTD (since {month_start}): <b>{mtd_str}</b>",
+            "",
+            "Dashboard and detailed metrics below ↓",
+        ]
+    return "\n".join(lines)
+
+
 async def cmd_daily(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Combined daily snapshot: brief graphic + mining stats + stock price."""
+    """Combined daily snapshot: header + brief graphic + mining stats + stock price."""
     user    = update.effective_user
     chat_id = update.effective_chat.id
     lang    = db.get_lang(chat_id)
@@ -834,15 +913,41 @@ async def cmd_daily(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     db.log_event("daily", user.id, user.username, chat_id)
     wait_msg = "⏳ 데일리 스냅샷 준비 중…" if lang == "ko" else "⏳ Preparing daily snapshot…"
     sent = await update.message.reply_text(wait_msg)
-    await sent.delete()
 
-    # 1. Brief screenshot
+    # Fetch all data sources in parallel
+    import asyncio as _asyncio
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZI
+    now      = _dt.now(_ZI("Asia/Seoul"))
+    date_str = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H:%M")
+
+    btc_task   = get_price_usd("btc")
+    stock_task = get_stock_price_krw(PARATAXIS_TICKER)
+    mining_task = get_mining_stats()
+
+    btc_result = stock_result = stats_result = None
+    try:
+        btc_result, stock_result, stats_result = await _asyncio.gather(
+            btc_task, stock_task, mining_task, return_exceptions=True
+        )
+        if isinstance(btc_result,   Exception): btc_result   = None
+        if isinstance(stock_result, Exception): stock_result = None
+        if isinstance(stats_result, Exception): stats_result = None
+    except Exception as exc:
+        log.error("cmd_daily gather error: %s", exc)
+
+    # 1. Header summary
+    header = _fmt_daily_header(lang, date_str, time_str, btc_result, stock_result, stats_result)
+    await sent.edit_text(header, parse_mode=ParseMode.HTML)
+
+    # 2. Brief screenshot
     try:
         png_bytes = await take_screenshot_with_timeout(lang)
         caption = (
-            f"📊 데일리 마켓 대시보드 — {__import__('datetime').date.today().strftime('%Y-%m-%d')}"
+            f"📊 데일리 마켓 대시보드 — {date_str}"
             if lang == "ko" else
-            f"📊 Daily Market Dashboard — {__import__('datetime').date.today().strftime('%Y-%m-%d')}"
+            f"📊 Daily Market Dashboard — {date_str}"
         )
         await update.message.reply_photo(photo=png_bytes, caption=caption)
     except BriefError as exc:
@@ -850,20 +955,26 @@ async def cmd_daily(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         err = "⚠️ 스크린샷을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not capture dashboard screenshot."
         await update.message.reply_text(err)
 
-    # 2. Mining stats
-    try:
-        stats = await get_mining_stats()
-        await update.message.reply_text(fmt_mining_stats(stats, lang), parse_mode=ParseMode.HTML)
-    except LuxorError as exc:
-        log.error("cmd_daily mining error: %s", exc)
-        err = "⚠️ 채굴 데이터를 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not fetch mining stats."
-        await update.message.reply_text(err)
+    # 3. Mining stats (detailed)
+    if stats_result and not isinstance(stats_result, Exception):
+        await update.message.reply_text(fmt_mining_stats(stats_result, lang), parse_mode=ParseMode.HTML)
+    else:
+        try:
+            stats_result = await get_mining_stats()
+            await update.message.reply_text(fmt_mining_stats(stats_result, lang), parse_mode=ParseMode.HTML)
+        except LuxorError as exc:
+            log.error("cmd_daily mining retry error: %s", exc)
+            err = "⚠️ 채굴 데이터를 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not fetch mining stats."
+            await update.message.reply_text(err)
 
-    # 3. Stock price
-    try:
-        result = await get_stock_price_krw(PARATAXIS_TICKER)
-        await update.message.reply_text(fmt_stock_price(result, lang), parse_mode=ParseMode.HTML)
-    except Exception as exc:
-        log.error("cmd_daily stock error: %s", exc)
-        err = "⚠️ 주가를 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not fetch stock price."
-        await update.message.reply_text(err)
+    # 4. Stock price (detailed)
+    if stock_result and not isinstance(stock_result, Exception) and "error" not in stock_result:
+        await update.message.reply_text(fmt_stock_price(stock_result, lang), parse_mode=ParseMode.HTML)
+    else:
+        try:
+            stock_result = await get_stock_price_krw(PARATAXIS_TICKER)
+            await update.message.reply_text(fmt_stock_price(stock_result, lang), parse_mode=ParseMode.HTML)
+        except Exception as exc:
+            log.error("cmd_daily stock retry error: %s", exc)
+            err = "⚠️ 주가를 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not fetch stock price."
+            await update.message.reply_text(err)
