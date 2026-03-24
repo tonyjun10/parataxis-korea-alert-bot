@@ -39,6 +39,8 @@ import db
 from handlers import (
     callback_handler,
     cmd_announcement,
+    cmd_kakao,
+    cmd_kakaoexport,
     cmd_audit,
     cmd_brief,
     cmd_daily,
@@ -91,6 +93,8 @@ def main():
     app.add_handler(CommandHandler("mining",  cmd_mining))
     app.add_handler(CommandHandler("daily",   cmd_daily))
     app.add_handler(CommandHandler("announcement", cmd_announcement))
+    app.add_handler(CommandHandler("kakao",        cmd_kakao))
+    app.add_handler(CommandHandler("kakaoexport",  cmd_kakaoexport))
 
     # ── Callback (inline buttons) ──────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(callback_handler))
