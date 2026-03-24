@@ -126,6 +126,13 @@ _POSTGRES_TABLES = [
         chat_id    BIGINT,
         payload    TEXT
     )""",
+    """CREATE TABLE IF NOT EXISTS kakao_log (
+        id        SERIAL PRIMARY KEY,
+        logged_at TEXT NOT NULL,
+        user_id   BIGINT,
+        username  TEXT,
+        message   TEXT NOT NULL
+    )""",
 ]
 
 _SQLITE_SCHEMA = """
@@ -164,6 +171,13 @@ CREATE TABLE IF NOT EXISTS audit_log (
     username   TEXT,
     chat_id    INTEGER,
     payload    TEXT
+);
+CREATE TABLE IF NOT EXISTS kakao_log (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    logged_at TEXT NOT NULL,
+    user_id   INTEGER,
+    username  TEXT,
+    message   TEXT NOT NULL
 );
 """
 
@@ -555,6 +569,33 @@ def get_recent_users(limit: int = 20) -> list:
             f" FROM audit_log WHERE user_id IS NOT NULL"
             f" GROUP BY user_id, username ORDER BY last_seen DESC LIMIT {_p()}",
             (limit,))
+        return _fetchall(cur)
+    finally:
+        conn.close()
+
+
+# ── Kakao log ──────────────────────────────────────────────────────────────────
+
+def kakao_log_add(user_id: int, username: str | None, message: str) -> None:
+    """Insert a new kakao log entry."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    ts = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST")
+    conn = get_conn()
+    try:
+        _execute(conn,
+            f"INSERT INTO kakao_log (logged_at, user_id, username, message) VALUES ({_p()},{_p()},{_p()},{_p()})",
+            (ts, user_id, username, message))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def kakao_log_get_all() -> list[dict]:
+    """Return all kakao log entries, oldest first."""
+    conn = get_conn()
+    try:
+        cur = _execute(conn, "SELECT logged_at, user_id, username, message FROM kakao_log ORDER BY id ASC")
         return _fetchall(cur)
     finally:
         conn.close()
