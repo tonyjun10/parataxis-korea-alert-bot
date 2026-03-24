@@ -960,3 +960,64 @@ async def cmd_daily(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         log.error("cmd_daily brief error: %s", exc)
         err = "⚠️ 스크린샷을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not capture dashboard screenshot."
         await update.message.reply_text(err)
+
+
+
+# ── /kakao + /kakaoexport ──────────────────────────────────────────────────────
+
+_KAKAO_ALLOWED = {7205462694, 8168826794, 921350602}  # Tony, David, Jason
+
+
+async def cmd_kakao(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Log a Kakao meeting note. Authorized users only."""
+    user = update.effective_user
+    if not user or user.id not in _KAKAO_ALLOWED:
+        await update.message.reply_text("Command not recognized.")
+        return
+
+    # Preserve exact formatting — split raw text after the command token
+    raw   = (update.message.text or "")
+    parts = raw.split(None, 1)
+    msg   = parts[1] if len(parts) > 1 else ""
+    if not msg:
+        await update.message.reply_text("Usage: /kakao <message>")
+        return
+
+    display = user.username or user.full_name or str(user.id)
+    db.kakao_log_add(user.id, display, msg)
+    await update.message.reply_text("✅ Logged.")
+
+
+async def cmd_kakaoexport(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Export all kakao log entries. Available to all approved users."""
+    entries = db.kakao_log_get_all()
+    if not entries:
+        await update.message.reply_text("No kakao log entries yet.")
+        return
+
+    lines = []
+    for e in entries:
+        who = e.get("username") or str(e.get("user_id", "unknown"))
+        # Format: 3/23/2026 5:18pm  JDragon812 wrote '...'
+        # logged_at is already "YYYY-MM-DD HH:MM KST"
+        ts_raw = e.get("logged_at", "")
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(ts_raw, "%Y-%m-%d %H:%M KST")
+            ts = dt.strftime("%-m/%-d/%Y %-I:%M%p").lower()
+            # Capitalise AM/PM
+            ts = ts[:-2] + ts[-2:].upper()
+        except Exception:
+            ts = ts_raw
+        text = e.get("message", "")
+        lines.append(f"{ts}  {who} wrote '{text}'")
+
+    output = "\n\n".join(lines)
+
+    # Telegram max message length is 4096 chars; chunk if needed
+    LIMIT = 4000
+    if len(output) <= LIMIT:
+        await update.message.reply_text(output)
+    else:
+        for i in range(0, len(output), LIMIT):
+            await update.message.reply_text(output[i:i + LIMIT])
