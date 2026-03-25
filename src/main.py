@@ -40,6 +40,7 @@ from handlers import (
     callback_handler,
     cmd_announcement,
     cmd_kakao,
+    cmd_t,
     cmd_kakaoexport,
     cmd_audit,
     cmd_brief,
@@ -95,6 +96,7 @@ def main():
     app.add_handler(CommandHandler("announcement", cmd_announcement))
     app.add_handler(CommandHandler("kakao",        cmd_kakao))
     app.add_handler(CommandHandler("kakaoexport",  cmd_kakaoexport))
+    app.add_handler(CommandHandler("t",            cmd_t))
 
     # ── Callback (inline buttons) ──────────────────────────────────────────────
     app.add_handler(CallbackQueryHandler(callback_handler))
