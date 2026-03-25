@@ -599,3 +599,15 @@ def kakao_log_get_all() -> list[dict]:
         return _fetchall(cur)
     finally:
         conn.close()
+
+
+def kakao_log_get_recent(limit: int = 3) -> list[dict]:
+    """Return the most recent kakao log entries, oldest-first within the slice."""
+    conn = get_conn()
+    try:
+        cur = _execute(conn,
+            f"SELECT logged_at, user_id, username, message FROM kakao_log ORDER BY id DESC LIMIT {_p()}",
+            (limit,))
+        return list(reversed(_fetchall(cur)))
+    finally:
+        conn.close()
