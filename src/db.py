@@ -126,7 +126,15 @@ _POSTGRES_TABLES = [
         chat_id    BIGINT,
         payload    TEXT
     )""",
-    """CREATE TABLE IF NOT EXISTS kakao_log (
+    """CREATE TABLE IF NOT EXISTS user_t_lang (
+        user_id BIGINT PRIMARY KEY,
+        lang    TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS user_t_lang (
+    user_id INTEGER PRIMARY KEY,
+    lang    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS kakao_log (
         id        SERIAL PRIMARY KEY,
         logged_at TEXT NOT NULL,
         user_id   BIGINT,
@@ -609,5 +617,53 @@ def kakao_log_get_recent(limit: int = 3) -> list[dict]:
             f"SELECT logged_at, user_id, username, message FROM kakao_log ORDER BY id DESC LIMIT {_p()}",
             (limit,))
         return list(reversed(_fetchall(cur)))
+    finally:
+        conn.close()
+
+
+# ── User translation language preference ──────────────────────────────────────
+
+def set_t_lang(user_id: int, lang: str) -> None:
+    """Save a user's default translation target language."""
+    conn = get_conn()
+    try:
+        if USE_POSTGRES:
+            _execute(conn,
+                "INSERT INTO user_t_lang(user_id, lang) VALUES(%s, %s) "
+                "ON CONFLICT (user_id) DO UPDATE SET lang=%s",
+                (user_id, lang, lang))
+        else:
+            _execute(conn,
+                "INSERT INTO user_t_lang(user_id, lang) VALUES(?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET lang=?",
+                (user_id, lang, lang))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_t_lang(user_id: int) -> str | None:
+    """Return the user's saved translation target language, or None."""
+    conn = get_conn()
+    try:
+        cur = _execute(conn,
+            f"SELECT lang FROM user_t_lang WHERE user_id={_p()}",
+            (user_id,))
+        row = cur.fetchone()
+        if row:
+            return row["lang"] if isinstance(row, dict) else row[0]
+        return None
+    finally:
+        conn.close()
+
+
+def unset_t_lang(user_id: int) -> None:
+    """Remove the user's saved translation target language."""
+    conn = get_conn()
+    try:
+        _execute(conn,
+            f"DELETE FROM user_t_lang WHERE user_id={_p()}",
+            (user_id,))
+        conn.commit()
     finally:
         conn.close()
