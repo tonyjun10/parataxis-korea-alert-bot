@@ -3,9 +3,6 @@ openai_translate.py — Translation via Anthropic Claude API.
 
 Reuses the existing ANTHROPIC_API_KEY env var.
 All errors surface as TranslateError so callers can handle gracefully.
-
-If target_lang is None, Claude auto-detects and translates to the opposite language
-(English → Korean, Korean → English) in a single API call.
 """
 
 import asyncio
@@ -31,28 +28,17 @@ class TranslateError(Exception):
     pass
 
 
-def _translate_sync(text: str, target_lang: str | None) -> str:
+def _is_korean(text: str) -> bool:
+    """Returns True if text contains significant Korean characters."""
+    korean = sum(1 for c in text if '\uAC00' <= c <= '\uD7A3')
+    alpha  = sum(1 for c in text if c.isalpha())
+    return alpha > 0 and (korean / alpha) > 0.3
+
+
+def _call_claude(system: str, text: str) -> str:
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         raise TranslateError("ANTHROPIC_API_KEY is not set.")
-
-    if target_lang is None:
-        system = (
-            "You are a translation engine. "
-            "If the input is in Korean, translate it to English. "
-            "If the input is in English, translate it to Korean. "
-            "Always translate the entire message including any mixed words. "
-            "Output only the translated text. No explanations or commentary."
-        )
-    else:
-        lang_name = _LANG_NAMES.get(target_lang, target_lang)
-        system = (
-            f"You are a translation engine. Translate everything the user sends into {lang_name}. "
-            f"Output only the translated text. "
-            f"Preserve formatting, line breaks, spacing, and emojis exactly. "
-            f"No explanations, labels, quotes, or commentary."
-        )
-
     try:
         r = httpx.post(
             _API_URL,
@@ -77,9 +63,25 @@ def _translate_sync(text: str, target_lang: str | None) -> str:
         raise TranslateError(f"Translation request failed: {exc}") from exc
 
 
+def _translate_sync(text: str, target_lang: str | None) -> str:
+    if target_lang is None:
+        # Detect via Unicode — no API call needed
+        target_lang = "en" if _is_korean(text) else "ko"
+        log.info("[translate] auto target_lang=%s", target_lang)
+
+    lang_name = _LANG_NAMES.get(target_lang, target_lang)
+    system = (
+        f"Translate the text the user sends into {lang_name}. "
+        f"Output only the translated text. "
+        f"Preserve formatting, line breaks, spacing, and emojis exactly. "
+        f"No explanations, labels, or commentary."
+    )
+    return _call_claude(system, text)
+
+
 async def detect_lang(text: str) -> str:
-    """Kept for compatibility — not used by auto-detect path."""
-    return "en"
+    """Kept for compatibility."""
+    return "ko" if _is_korean(text) else "en"
 
 
 async def translate(text: str, target_lang: str | None) -> str:
