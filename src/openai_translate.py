@@ -21,7 +21,7 @@ _LANG_NAMES = {
 SUPPORTED_LANGS = set(_LANG_NAMES.keys())
 
 _API_URL = "https://api.anthropic.com/v1/messages"
-_MODEL   = "claude-haiku-4-5-20251001"
+_MODEL   = "claude-sonnet-4-6"
 
 
 class TranslateError(Exception):
