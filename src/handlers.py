@@ -965,6 +965,8 @@ async def cmd_daily(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── /kakao + /kakaoexport ──────────────────────────────────────────────────────
 
+import sheets as _sheets
+
 _KAKAO_ALLOWED = {7205462694, 8168826794, 921350602}  # Tony, David, Jason
 
 
@@ -985,6 +987,13 @@ async def cmd_kakao(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     display = user.username or user.full_name or str(user.id)
     db.kakao_log_add(user.id, display, msg)
+
+    # Fire-and-forget to Google Sheets — failure never affects the bot
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    ts = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST")
+    ctx.application.create_task(_sheets.append_kakao_entry(ts, display, msg))
+
     await update.message.reply_text("✅ Logged.")
 
 
@@ -1014,10 +1023,14 @@ async def cmd_kakaoexport(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     output = "\n\n".join(lines)
 
+    sheet_link = (
+        "\n\n📋 Full log: https://docs.google.com/spreadsheets/d/1oQcNwpGjePKFvUaIyN44tKU04RtQpHBCZNMy1q2scbg"
+    )
+
     # Telegram max message length is 4096 chars; chunk if needed
     LIMIT = 4000
     if len(output) <= LIMIT:
-        await update.message.reply_text(output)
+        await update.message.reply_text(output + sheet_link)
     else:
         for i in range(0, len(output), LIMIT):
             await update.message.reply_text(output[i:i + LIMIT])
