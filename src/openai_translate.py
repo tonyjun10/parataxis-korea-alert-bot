@@ -62,14 +62,17 @@ def _call_claude(prompt: str, max_tokens: int = 2048) -> str:
 def _translate_sync(text: str, target_lang: str | None) -> str:
     if target_lang is None:
         system = (
-            "You are a translation engine. You only output translated text, nothing else. "
-            "No explanations, no questions, no apologies, no commentary. "
-            "If the input is Korean, output the English translation only. "
-            "If the input is English, output the Korean translation only. "
-            "If mixed, translate everything into whichever language is less dominant. "
-            "Never refuse. Never ask for clarification. Just translate and output."
+            "You are a translation engine. Translate the user message and output ONLY the translation. "
+            "Korean input MUST be translated to English. English input MUST be translated to Korean. "
+            "Do not output the original language. Do not explain. Do not comment."
         )
-        messages = [{"role": "user", "content": text}]
+        messages = [
+            {"role": "user", "content": "안녕하세요"},
+            {"role": "assistant", "content": "Hello"},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "안녕하세요"},
+            {"role": "user", "content": text},
+        ]
     else:
         lang_name = _LANG_NAMES.get(target_lang, target_lang)
         system = (
