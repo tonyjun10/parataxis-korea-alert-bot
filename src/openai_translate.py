@@ -3,6 +3,9 @@ openai_translate.py — Translation via Anthropic Claude API.
 
 Reuses the existing ANTHROPIC_API_KEY env var.
 All errors surface as TranslateError so callers can handle gracefully.
+
+If target_lang is None, Claude auto-detects and translates to the opposite language
+(English → Korean, Korean → English) in a single API call.
 """
 
 import asyncio
@@ -56,35 +59,35 @@ def _call_claude(prompt: str, max_tokens: int = 2048) -> str:
         raise TranslateError(f"Translation request failed: {exc}") from exc
 
 
-def _detect_lang_sync(text: str) -> str:
-    """Detect whether text is primarily English or Korean. Returns 'en' or 'ko'."""
-    prompt = (
-        "Detect the primary language of the following text. "
-        "Reply with only one word: 'en' if it is primarily English, or 'ko' if it is primarily Korean. "
-        "If the text is mixed or ambiguous, pick whichever language dominates. "
-        "No other output.\n\n"
-        f"{text}"
-    )
-    result = _call_claude(prompt, max_tokens=5).lower().strip()
-    return result if result in ("en", "ko") else "en"
-
-
-def _translate_sync(text: str, target_lang: str) -> str:
-    lang_name = _LANG_NAMES.get(target_lang, target_lang)
-    prompt = (
-        f"Translate the following message into {lang_name}. "
-        f"Preserve the original meaning, tone, formatting, line breaks, spacing, and emojis exactly. "
-        f"Output only the translated text with no labels, quotes, explanations, or commentary.\n\n"
-        f"{text}"
-    )
+def _translate_sync(text: str, target_lang: str | None) -> str:
+    if target_lang is None:
+        # Single call: detect language and translate to opposite
+        prompt = (
+            "You will receive a message that may be in English, Korean, or a mix of both.\n"
+            "Determine the dominant language of the message.\n"
+            "If the dominant language is English, translate the ENTIRE message into Korean — including any English words, names, or phrases mixed in.\n"
+            "If the dominant language is Korean, translate the ENTIRE message into English — including any Korean words or phrases mixed in.\n"
+            "Do not leave any part of the original language untranslated.\n"
+            "Preserve the original meaning, tone, formatting, line breaks, spacing, and emojis exactly.\n"
+            "Output only the translated text. No labels, quotes, explanations, or commentary.\n\n"
+            f"{text}"
+        )
+    else:
+        lang_name = _LANG_NAMES.get(target_lang, target_lang)
+        prompt = (
+            f"Translate the following message into {lang_name}.\n"
+            f"Preserve the original meaning, tone, formatting, line breaks, spacing, and emojis exactly.\n"
+            f"Output only the translated text with no labels, quotes, explanations, or commentary.\n\n"
+            f"{text}"
+        )
     return _call_claude(prompt)
 
 
 async def detect_lang(text: str) -> str:
-    """Async language detection. Returns 'en' or 'ko'."""
-    return await asyncio.to_thread(_detect_lang_sync, text)
+    """Kept for compatibility — not used by auto-detect path."""
+    return "en"
 
 
-async def translate(text: str, target_lang: str) -> str:
-    """Async translation. Raises TranslateError on failure."""
+async def translate(text: str, target_lang: str | None) -> str:
+    """Async translation. target_lang=None means auto-detect and flip. Raises TranslateError on failure."""
     return await asyncio.to_thread(_translate_sync, text, target_lang)
