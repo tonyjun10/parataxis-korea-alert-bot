@@ -1,11 +1,12 @@
 """
 sheets.py — Google Sheets integration for Kakao log.
 
-Credentials are loaded from the GOOGLE_SHEETS_CREDENTIALS env var (JSON string).
+Credentials loaded from GOOGLE_SHEETS_CREDENTIALS env var (base64-encoded JSON).
 All failures are caught and logged — never raises to the caller.
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -27,13 +28,8 @@ def _append_sync(timestamp: str, user: str, message: str) -> None:
     if not raw:
         raise RuntimeError("GOOGLE_SHEETS_CREDENTIALS env var not set")
 
-    # Fix mangled newlines in private key — Railway sometimes escapes them
-    raw = raw.replace("\\n", "\n")
-    info = json.loads(raw)
-
-    # Ensure private key newlines are real newlines after JSON parse
-    if "private_key" in info:
-        info["private_key"] = info["private_key"].replace("\\n", "\n")
+    # Decode base64 — avoids Railway mangling newlines in the private key
+    info = json.loads(base64.b64decode(raw.strip()).decode("utf-8"))
 
     creds  = Credentials.from_service_account_info(info, scopes=_SCOPES)
     client = gspread.authorize(creds)
