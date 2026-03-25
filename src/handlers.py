@@ -992,7 +992,7 @@ async def cmd_kakao(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     from datetime import datetime
     from zoneinfo import ZoneInfo
     ts = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST")
-    ctx.application.create_task(_sheets.append_kakao_entry(ts, display, msg, bot=ctx.bot, admin_id=ADMIN_USER_ID))
+    ctx.application.create_task(_sheets.append_kakao_entry(ts, display, msg))
 
     await update.message.reply_text("✅ Logged.")
 
