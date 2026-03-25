@@ -992,14 +992,14 @@ async def cmd_kakao(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     from datetime import datetime
     from zoneinfo import ZoneInfo
     ts = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST")
-    ctx.application.create_task(_sheets.append_kakao_entry(ts, display, msg))
+    ctx.application.create_task(_sheets.append_kakao_entry(ts, display, msg, bot=ctx.bot, admin_id=ADMIN_USER_ID))
 
     await update.message.reply_text("✅ Logged.")
 
 
 async def cmd_kakaoexport(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Export all kakao log entries. Available to all approved users."""
-    entries = db.kakao_log_get_all()
+    entries = db.kakao_log_get_recent(3)
     if not entries:
         await update.message.reply_text("No kakao log entries yet.")
         return
