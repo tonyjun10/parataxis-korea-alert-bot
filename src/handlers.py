@@ -1037,18 +1037,14 @@ async def cmd_kakaoexport(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── /t (translation) ──────────────────────────────────────────────────────────
 
-from openai_translate import TranslateError, translate as _oa_translate, SUPPORTED_LANGS as _T_LANGS
+from openai_translate import TranslateError, translate as _oa_translate, detect_lang as _oa_detect, SUPPORTED_LANGS as _T_LANGS
 
 _T_HELP = (
     "<b>Translation command usage:</b>\n\n"
-    "/t help — show this message\n"
-    "/t set en — set default language to English\n"
-    "/t set ko — set default language to Korean\n"
-    "/t status — show your current default language\n"
-    "/t unset — remove your default language\n"
-    "/t &lt;message&gt; — translate using your default language\n"
-    "/t en &lt;message&gt; — translate to English (override)\n"
-    "/t ko &lt;message&gt; — translate to Korean (override)"
+    "/t &lt;message&gt; — auto-detects English↔Korean and translates to the opposite language\n"
+    "/t en &lt;message&gt; — translate to English (explicit override)\n"
+    "/t ko &lt;message&gt; — translate to Korean (explicit override)\n"
+    "/t help — show this message"
 )
 
 
@@ -1106,14 +1102,15 @@ async def cmd_t(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"Usage: /t {target_lang} <message>")
             return
     else:
-        # ── /t <message> — use saved default ──
-        target_lang = db.get_t_lang(user.id)
-        if not target_lang:
-            await update.message.reply_text(
-                "No default language set. Use /t set ko or /t ko <message>."
-            )
-            return
+        # ── /t <message> — use saved default or auto-detect ──
         text = body
+        saved = db.get_t_lang(user.id)
+        if saved:
+            target_lang = saved
+        else:
+            # Auto-detect: English → Korean, Korean → English
+            detected = await _oa_detect(text)
+            target_lang = "ko" if detected == "en" else "en"
 
     # Translate
     wait = await update.message.reply_text("⏳ Translating…")
