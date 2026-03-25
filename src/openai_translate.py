@@ -63,13 +63,10 @@ def _translate_sync(text: str, target_lang: str | None) -> str:
     if target_lang is None:
         # Single call: detect language and translate to opposite
         prompt = (
-            "You will receive a message that may be in English, Korean, or a mix of both.\n"
-            "Determine the dominant language of the message.\n"
-            "If the dominant language is English, translate the ENTIRE message into Korean — including any English words, names, or phrases mixed in.\n"
-            "If the dominant language is Korean, translate the ENTIRE message into English — including any Korean words or phrases mixed in.\n"
-            "Do not leave any part of the original language untranslated.\n"
-            "Preserve the original meaning, tone, formatting, line breaks, spacing, and emojis exactly.\n"
-            "Output only the translated text. No labels, quotes, explanations, or commentary.\n\n"
+            "You are a silent translation engine. Never explain, comment, ask questions, or add any text of your own.\n"
+            "Rule: if the input is Korean → output English only. If the input is English → output Korean only.\n"
+            "If mixed, detect the dominant language and translate everything into the opposite language.\n"
+            "Output ONLY the translated text. Nothing else. Not one extra word.\n\n"
             f"{text}"
         )
     else:
