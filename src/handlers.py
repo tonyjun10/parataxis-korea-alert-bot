@@ -1062,6 +1062,21 @@ async def cmd_t(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     parts = raw.split(None, 1)
     body  = parts[1] if len(parts) > 1 else ""
 
+    # ── /t (reply-based) — /t with no body sent as a reply to another message ──
+    if not body and update.message.reply_to_message:
+        replied_text = (update.message.reply_to_message.text or "").strip()
+        if not replied_text:
+            await update.message.reply_text("The replied-to message has no text to translate.")
+            return
+        wait = await update.message.reply_text("⏳ Translating…")
+        try:
+            result = await _oa_translate(replied_text, None)
+            await wait.edit_text(result)
+        except TranslateError as exc:
+            log.error("cmd_t reply translate error: %s", exc)
+            await wait.edit_text("⚠️ Translation failed. Please try again shortly.")
+        return
+
     # ── /t help ──
     if not body or body.strip().lower() == "help":
         await update.message.reply_text(_T_HELP, parse_mode=ParseMode.HTML)
@@ -1108,14 +1123,13 @@ async def cmd_t(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if saved:
             target_lang = saved
         else:
-            # Auto-detect: English → Korean, Korean → English
-            detected = await _oa_detect(text)
-            target_lang = "ko" if detected == "en" else "en"
+            # Auto-detect handled inside translate call — pass None
+            target_lang = None
 
     # Translate
     wait = await update.message.reply_text("⏳ Translating…")
     try:
-        result = await _oa_translate(text, target_lang)
+        result = await _oa_translate(text, target_lang)  # target_lang=None means auto-detect
         await wait.edit_text(result)
     except TranslateError as exc:
         log.error("cmd_t translate error: %s", exc)
