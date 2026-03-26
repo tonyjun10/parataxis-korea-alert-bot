@@ -384,13 +384,14 @@ def has_any_subscription(chat_id: int) -> bool:
 
 
 def get_chats_for(company: str, category: str) -> list[dict]:
+    """Return only private DM chats (chat_id > 0) — group chats never receive push notifications."""
     conn = get_conn()
     try:
         cur = _execute(conn,
             f"""SELECT s.chat_id, COALESCE(ul.lang, 'en') AS lang
             FROM subscriptions s
             LEFT JOIN user_lang ul ON ul.chat_id = s.chat_id
-            WHERE s.company={_p()} AND s.category={_p()}""",
+            WHERE s.company={_p()} AND s.category={_p()} AND s.chat_id > 0""",
             (company, category))
         return _fetchall(cur)
     finally:
