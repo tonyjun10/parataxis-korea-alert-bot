@@ -576,6 +576,17 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
     # ── Subscribe menu ─────────────────────────────────────────────────
+    elif data == "menu:logs":
+        from sheets import SHEET_URL, WATCHLIST_SHEET_URL
+        wl = WATCHLIST_SHEET_URL
+        kk = SHEET_URL
+        if lang == "ko":
+            msg = "<b>📋 로그 & 기록</b>\n\n📰 <a href='" + wl + "'>뉴스 & 공시 워치리스트</a>\n💬 <a href='" + kk + "'>카카오 미팅 로그</a>"
+        else:
+            msg = "<b>📋 Logs & Records</b>\n\n📰 <a href='" + wl + "'>News & Disclosure Watchlist</a>\n💬 <a href='" + kk + "'>Kakao Meeting Log</a>"
+        nav = kb_after_result(lang, "parataxis")
+        await query.edit_message_text(msg, reply_markup=nav, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
     elif data == "menu:subscribe":
         prompt = "구독할 항목을 선택하세요:" if lang == "ko" else "Choose what to subscribe to:"
         await query.edit_message_text(
