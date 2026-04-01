@@ -25,6 +25,7 @@ from formatter import fmt_disclosures, fmt_news
 from news import get_news
 from brief import BriefError, take_screenshot_with_timeout
 from luxor import LuxorError, fmt_mining_stats, get_mining_stats
+import sheets as _sheets
 from prices import fmt_stock_price, get_stock_price_krw, PARATAXIS_TICKER
 from translate import summarize_article, translate_title
 
@@ -144,6 +145,11 @@ async def _check_disclosures(bot: Bot, company: str) -> int:
     new_items.sort(key=_disc_key, reverse=True)
     best = new_items[0]
 
+    # Log to watchlist sheet (fire-and-forget)
+    disc_title = best.get("title", best.get("report_nm", ""))
+    disc_url   = best.get("url", "")
+    asyncio.ensure_future(_sheets.append_watchlist_entry(company, "Disclosure", disc_title, disc_url))
+
     alerted = 0
     for chat in chats:
         chat_id = chat["chat_id"]
@@ -224,6 +230,10 @@ async def _check_news(bot: Bot, company: str) -> int:
         return dt if dt is not None else datetime.min.replace(tzinfo=timezone.utc)
     new_items.sort(key=_news_key, reverse=True)
     best = new_items[0]
+
+    # Log to watchlist sheet (fire-and-forget)
+    asyncio.ensure_future(_sheets.append_watchlist_entry(
+        company, "News", best.get("title", ""), best.get("url", "")))
 
     # ── Translate title + optional summary (done once, reused for all chats) ──
     original_title = best.get("title", "")
