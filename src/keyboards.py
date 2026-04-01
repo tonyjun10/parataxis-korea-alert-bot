@@ -32,6 +32,7 @@ def kb_main(lang: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("📁 스트래티지",       callback_data="company:microstrategy")],
             [InlineKeyboardButton("💰 가격",             callback_data="menu:price")],
             [InlineKeyboardButton("🔔 구독 관리",        callback_data="menu:subscribe")],
+            [InlineKeyboardButton("📋 로그",             callback_data="menu:logs")],
         ]
     else:
         rows = [
@@ -41,6 +42,7 @@ def kb_main(lang: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("📁 Strategy",        callback_data="company:microstrategy")],
             [InlineKeyboardButton("💰 Price",           callback_data="menu:price")],
             [InlineKeyboardButton("🔔 Subscribe",       callback_data="menu:subscribe")],
+            [InlineKeyboardButton("📋 Logs",            callback_data="menu:logs")],
         ]
     return InlineKeyboardMarkup(rows)
 
