@@ -587,6 +587,10 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         nav = kb_after_result(lang, "parataxis")
         await query.edit_message_text(msg, reply_markup=nav, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
+    elif data == "menu:translate_help":
+        nav = kb_after_result(lang, "parataxis")
+        await query.edit_message_text(_T_HELP, reply_markup=nav, parse_mode=ParseMode.HTML)
+
     elif data == "menu:subscribe":
         prompt = "구독할 항목을 선택하세요:" if lang == "ko" else "Choose what to subscribe to:"
         await query.edit_message_text(
@@ -1075,7 +1079,8 @@ async def cmd_t(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # ── /t (reply-based) — /t with no body sent as a reply to another message ──
     if not body and update.message.reply_to_message:
-        replied_text = (update.message.reply_to_message.text or "").strip()
+        replied_msg  = update.message.reply_to_message
+        replied_text = (replied_msg.text or replied_msg.caption or "").strip()
         if not replied_text:
             await update.message.reply_text("The replied-to message has no text to translate.")
             return
