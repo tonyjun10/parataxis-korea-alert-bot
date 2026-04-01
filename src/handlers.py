@@ -1074,8 +1074,12 @@ async def cmd_t(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Preserve full formatting — read raw text after /t
     raw   = (update.message.text or "").strip()
-    parts = raw.split(None, 1)
-    body  = parts[1] if len(parts) > 1 else ""
+    # Strip @BotName suffix for group chats e.g. /t@ParataxisBot -> /t
+    first_token = raw.split(None, 1)[0].split("@")[0]
+    rest        = raw[len(raw.split(None, 1)[0]):].strip() if len(raw.split(None, 1)) > 1 else ""
+    body        = rest
+
+    log.info("[cmd_t] raw=%r body=%r has_reply=%s", raw, body, bool(update.message.reply_to_message))
 
     # ── /t (reply-based) — /t with no body sent as a reply to another message ──
     if not body and update.message.reply_to_message:
