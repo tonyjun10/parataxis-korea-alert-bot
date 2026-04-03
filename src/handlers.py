@@ -1042,13 +1042,11 @@ async def cmd_kakaoexport(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "\n\n📋 Full log: https://docs.google.com/spreadsheets/d/1oQcNwpGjePKFvUaIyN44tKU04RtQpHBCZNMy1q2scbg"
     )
 
-    # Telegram max message length is 4096 chars; chunk if needed
-    LIMIT = 4000
-    if len(output) <= LIMIT:
-        await update.message.reply_text(output + sheet_link)
-    else:
-        for i in range(0, len(output), LIMIT):
-            await update.message.reply_text(output[i:i + LIMIT])
+    # If too long, truncate with ellipsis and always append sheet link
+    LIMIT = 3800
+    if len(output) > LIMIT:
+        output = output[:LIMIT].rsplit("\n", 1)[0] + "\n\n..."
+    await update.message.reply_text(output + sheet_link)
 
 # ── /t (translation) ──────────────────────────────────────────────────────────
 
