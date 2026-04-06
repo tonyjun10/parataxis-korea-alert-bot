@@ -385,6 +385,32 @@ async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
+# ── /subs (admin only) ────────────────────────────────────────────────────────
+
+async def cmd_subs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Show all active subscriptions grouped by chat."""
+    if not _is_admin(update.effective_user.id if update.effective_user else None):
+        await update.message.reply_text("Command not recognized.")
+        return
+
+    rows = db.get_all_subscriptions()
+    if not rows:
+        await update.message.reply_text("No active subscriptions.")
+        return
+
+    # Group by chat_id
+    from collections import defaultdict
+    by_chat = defaultdict(list)
+    for r in rows:
+        by_chat[r["chat_id"]].append(f"{r['company']}:{r['category']}")
+
+    lines = ["<b>📋 Active Subscriptions</b>\n"]
+    for i, (chat_id, subs) in enumerate(by_chat.items(), 1):
+        lines.append(f"{i}. <code>{chat_id}</code>\n   {', '.join(subs)}")
+
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
 # ── /announcement (admin only) ───────────────────────────────────────────────
 
 async def cmd_announcement(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
