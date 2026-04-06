@@ -65,10 +65,26 @@ async def append_kakao_entry(timestamp: str, user: str, message: str) -> None:
 
 # ── Watchlist logging (news + disclosures) ─────────────────────────────────────
 
-def _append_watchlist_sync(company: str, entry_type: str, title: str, url: str) -> None:
-    """Blocking append to the watchlist sheet. Run via asyncio.to_thread."""
+# Cached gspread client — avoids re-authenticating on every call
+_gspread_client = None
+
+def _get_gspread_client():
+    """Return a cached gspread client, creating one if needed."""
+    global _gspread_client
     import gspread
     from google.oauth2.service_account import Credentials
+    if _gspread_client is None:
+        raw = os.environ.get("GOOGLE_SHEETS_CREDENTIALS", "")
+        if not raw:
+            raise RuntimeError("GOOGLE_SHEETS_CREDENTIALS env var not set")
+        info          = json.loads(base64.b64decode(raw.strip()).decode("utf-8"))
+        creds         = Credentials.from_service_account_info(info, scopes=_SCOPES)
+        _gspread_client = gspread.authorize(creds)
+    return _gspread_client
+
+
+def _append_watchlist_sync(company: str, entry_type: str, title: str, url: str) -> None:
+    """Blocking append to the watchlist sheet. Run via asyncio.to_thread."""
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
@@ -76,14 +92,15 @@ def _append_watchlist_sync(company: str, entry_type: str, title: str, url: str) 
     if not tab:
         raise ValueError(f"No watchlist tab for company: {company}")
 
-    raw = os.environ.get("GOOGLE_SHEETS_CREDENTIALS", "")
-    if not raw:
-        raise RuntimeError("GOOGLE_SHEETS_CREDENTIALS env var not set")
-
-    info   = json.loads(base64.b64decode(raw.strip()).decode("utf-8"))
-    creds  = Credentials.from_service_account_info(info, scopes=_SCOPES)
-    client = gspread.authorize(creds)
-    sheet  = client.open_by_key(WATCHLIST_SHEET_ID).worksheet(tab)
+    try:
+        client = _get_gspread_client()
+        sheet  = client.open_by_key(WATCHLIST_SHEET_ID).worksheet(tab)
+    except Exception:
+        # If cached client fails, reset and retry once with a fresh one
+        global _gspread_client
+        _gspread_client = None
+        client = _get_gspread_client()
+        sheet  = client.open_by_key(WATCHLIST_SHEET_ID).worksheet(tab)
 
     ts = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST")
     sheet.append_row(
