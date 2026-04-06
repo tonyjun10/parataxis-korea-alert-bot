@@ -668,3 +668,19 @@ def unset_t_lang(user_id: int) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def get_all_subscriptions() -> list[dict]:
+    """Return all subscriptions grouped with username where available."""
+    conn = get_conn()
+    try:
+        cur = _execute(conn,
+            f"""SELECT s.chat_id, s.company, s.category,
+                COALESCE(ul.lang, 'en') AS lang
+                FROM subscriptions s
+                LEFT JOIN user_lang ul ON ul.chat_id = s.chat_id
+                WHERE s.chat_id > 0
+                ORDER BY s.chat_id, s.company, s.category""")
+        return _fetchall(cur)
+    finally:
+        conn.close()
