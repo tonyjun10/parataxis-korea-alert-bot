@@ -35,13 +35,14 @@ SEOUL = ZoneInfo("Asia/Seoul")
 # ── Configuration ──────────────────────────────────────────────────────────────
 NEWS_MAX_AGE_DAYS = 7   # do not alert on news older than this
 
-_DART_COMPANIES = ["parataxis", "bitmax", "bitplanet"]
-_NEWS_COMPANIES = ["parataxis", "bitmax", "bitplanet", "microstrategy"]
+_DART_COMPANIES = ["parataxis", "parataxiseth", "bitmax", "bitplanet"]
+_NEWS_COMPANIES = ["parataxis", "parataxiseth", "bitmax", "bitplanet", "microstrategy"]
 
 _COMPANY_LABEL = {
     "parataxis":     {"en": "Parataxis Korea", "ko": "파라택시스 코리아"},
     "bitmax":        {"en": "Bitmax",          "ko": "비트맥스"},
     "bitplanet":     {"en": "Bitplanet",       "ko": "비트플래닛"},
+    "parataxiseth":  {"en": "Parataxis Ethereum", "ko": "파라택시스 이더리움"},
     "microstrategy": {"en": "Strategy",        "ko": "스트래티지"},
 }
 
