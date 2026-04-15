@@ -31,13 +31,14 @@ log = logging.getLogger(__name__)
 # ── Constants ──────────────────────────────────────────────────────────────────
 ADMIN_USER_ID: int = 7205462694
 
-_DART_COMPANIES = {"parataxis", "bitmax", "bitplanet"}
-_ALL_COMPANIES  = ["parataxis", "bitmax", "bitplanet", "microstrategy"]
+_DART_COMPANIES = {"parataxis", "bitmax", "bitplanet", "parataxiseth"}
+_ALL_COMPANIES  = ["parataxis", "parataxiseth", "bitmax", "bitplanet", "microstrategy"]
 
 _COMPANY_LABEL = {
     "parataxis":     {"en": "Parataxis Korea", "ko": "파라택시스 코리아"},
     "bitmax":        {"en": "Bitmax",          "ko": "비트맥스"},
     "bitplanet":     {"en": "Bitplanet",       "ko": "비트플래닛"},
+    "parataxiseth":  {"en": "Parataxis Ethereum", "ko": "파라택시스 이더리움"},
     "microstrategy": {"en": "Strategy",        "ko": "스트래티지"},
 }
 
@@ -635,12 +636,12 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             db.subscribe(chat_id, "mining", "mining")
             db.subscribe(chat_id, "daily",  "daily")
             msg = "모든 항목 구독이 활성화되었습니다. ✅" if lang == "ko" else "Subscribed to everything. ✅"
-        elif topic in ("parataxis", "bitmax", "bitplanet", "microstrategy"):
+        elif topic in ("parataxis", "parataxiseth", "bitmax", "bitplanet", "microstrategy"):
             db.subscribe(chat_id, topic, "news")
-            if topic != "microstrategy":
+            if topic not in ("microstrategy",):
                 db.subscribe(chat_id, topic, "disclosures")
-            label = {"parataxis": "Parataxis Korea", "bitmax": "Bitmax",
-                     "bitplanet": "Bitplanet", "microstrategy": "Strategy"}[topic]
+            label = {"parataxis": "Parataxis Korea", "parataxiseth": "Parataxis Ethereum",
+                     "bitmax": "Bitmax", "bitplanet": "Bitplanet", "microstrategy": "Strategy"}[topic]
             msg = f"{label} 알림이 활성화되었습니다. ✅" if lang == "ko" else f"Subscribed to <b>{label}</b> alerts. ✅"
         elif topic == "brief":
             db.subscribe(chat_id, "brief", "brief")
@@ -654,7 +655,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             msg = "알 수 없는 항목입니다." if lang == "ko" else "Unknown subscription topic."
 
-        if is_first and topic in ("all", "parataxis", "bitmax", "bitplanet", "microstrategy"):
+        if is_first and topic in ("all", "parataxis", "parataxiseth", "bitmax", "bitplanet", "microstrategy"):
             await query.edit_message_text("⏳ Setting up alerts…")
             await _seed_dedup_tables()
 
@@ -769,6 +770,8 @@ async def _fetch_text(company: str, category: str, lang: str) -> str:
 
 def _detect_company(text: str) -> str:
     t = text.lower()
+    if "파라택시스 이더리움" in t or "parataxiseth" in t or "290560" in t:
+        return "parataxiseth"
     if "파라택시스" in t or "parataxis" in t:
         return "parataxis"
     if "비트맥스" in t or "bitmax" in t:
