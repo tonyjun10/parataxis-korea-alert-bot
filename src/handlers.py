@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 # ── Constants ──────────────────────────────────────────────────────────────────
 ADMIN_USER_ID: int = 7205462694
 
-_DART_COMPANIES = {"parataxis", "bitmax", "bitplanet", "parataxiseth"}
+_DART_COMPANIES = {"parataxis", "parataxiseth", "bitmax", "bitplanet"}
 _ALL_COMPANIES  = ["parataxis", "parataxiseth", "bitmax", "bitplanet", "microstrategy"]
 
 _COMPANY_LABEL = {
