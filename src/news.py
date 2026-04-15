@@ -30,7 +30,9 @@ COMPANY_QUERIES: dict[str, list[str]] = {
     ],
     "bitmax":        ["비트맥스", "Bitmax Korea"],
     "bitplanet":     ["비트플래닛", "Bitplanet Korea"],
+    "parataxiseth":  ["파라택시스이더리움", "파라택시스 이더리움", "290560 KOSDAQ", "PARATAXIS ETHEREUM"],
     "microstrategy": ["MicroStrategy", "MSTR bitcoin", "Strategy MicroStrategy"],
+    "parataxiseth":   ["파라택시스이더리움", "Parataxis Ethereum", "290560", "KOSDAQ 290560"],
 }
 
 
