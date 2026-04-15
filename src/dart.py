@@ -22,9 +22,10 @@ CORP_CODE_CACHE = Path("data/corp_codes.xml")
 
 # Manual overrides — fill in 8-digit DART corp_code if known
 CORP_CODE_OVERRIDES: dict[str, str] = {
-    "parataxis": "01227039",
-    "bitmax":    "",
-    "bitplanet": "",
+    "parataxis":    "",
+    "bitmax":       "",
+    "bitplanet":    "",
+    "parataxiseth": "",
 }
 
 _corp_code_map: dict[str, str] = {}  # name_lower -> corp_code
@@ -82,7 +83,8 @@ def get_corp_code(company_key: str) -> str:
     keywords = {
         "parataxis": ["파라택시스", "parataxis"],
         "bitmax":    ["비트맥스", "bitmax"],
-        "bitplanet": ["비트플래닛", "bitplanet"],
+        "bitplanet":    ["비트플래닛", "bitplanet"],
+        "parataxiseth": ["파라택시스이더리움", "파라택시스 이더리움", "290560"],
     }
     for kw in keywords.get(company_key.lower(), [company_key.lower()]):
         for name, code in _corp_code_map.items():
@@ -143,4 +145,3 @@ def _get_disclosures_sync(company_key: str, limit: int = 5) -> list[dict]:
 async def get_disclosures(company_key: str, limit: int = 5) -> list[dict]:
     """Async entry point — never blocks the event loop."""
     return await asyncio.to_thread(_get_disclosures_sync, company_key, limit)
-
