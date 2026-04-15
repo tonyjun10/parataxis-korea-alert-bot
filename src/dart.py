@@ -25,7 +25,7 @@ CORP_CODE_OVERRIDES: dict[str, str] = {
     "parataxis":    "",
     "bitmax":       "",
     "bitplanet":    "",
-    "parataxiseth": "",
+    "parataxiseth": "01130849",
 }
 
 _corp_code_map: dict[str, str] = {}  # name_lower -> corp_code
@@ -84,7 +84,7 @@ def get_corp_code(company_key: str) -> str:
         "parataxis": ["파라택시스", "parataxis"],
         "bitmax":    ["비트맥스", "bitmax"],
         "bitplanet":    ["비트플래닛", "bitplanet"],
-        "parataxiseth": ["파라택시스이더리움", "파라택시스 이더리움", "290560"],
+        "parataxiseth": ["신시웨이", "sinsiway", "파라택시스이더리움", "파라택시스 이더리움"],
     }
     for kw in keywords.get(company_key.lower(), [company_key.lower()]):
         for name, code in _corp_code_map.items():
