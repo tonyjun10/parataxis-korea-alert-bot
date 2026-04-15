@@ -8,7 +8,7 @@ All other functions are completely unchanged.
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 # Companies that support DART disclosures
-_DART_COMPANIES = {"parataxis", "bitmax", "bitplanet"}
+_DART_COMPANIES = {"parataxis", "parataxiseth", "bitmax", "bitplanet"}
 
 
 # ── Step 1: Language ───────────────────────────────────────────────────────────
@@ -27,6 +27,7 @@ def kb_main(lang: str) -> InlineKeyboardMarkup:
     if lang == "ko":
         rows = [
             [InlineKeyboardButton("📁 파라택시스 코리아", callback_data="company:parataxis")],
+            [InlineKeyboardButton("📁 파라택시스 이더리움", callback_data="company:parataxiseth")],
             [InlineKeyboardButton("📁 비트맥스",         callback_data="company:bitmax")],
             [InlineKeyboardButton("📁 비트플래닛",       callback_data="company:bitplanet")],
             [InlineKeyboardButton("📁 스트래티지",       callback_data="company:microstrategy")],
@@ -37,7 +38,8 @@ def kb_main(lang: str) -> InlineKeyboardMarkup:
         ]
     else:
         rows = [
-            [InlineKeyboardButton("📁 Parataxis Korea", callback_data="company:parataxis")],
+            [InlineKeyboardButton("📁 Parataxis Korea",     callback_data="company:parataxis")],
+            [InlineKeyboardButton("📁 Parataxis Ethereum", callback_data="company:parataxiseth")],
             [InlineKeyboardButton("📁 Bitmax",          callback_data="company:bitmax")],
             [InlineKeyboardButton("📁 Bitplanet",       callback_data="company:bitplanet")],
             [InlineKeyboardButton("📁 Strategy",        callback_data="company:microstrategy")],
@@ -160,6 +162,7 @@ def kb_subscribe(lang: str) -> InlineKeyboardMarkup:
         rows = [
             [InlineKeyboardButton("✅ 전체 구독",               callback_data="sub:all")],
             [InlineKeyboardButton("📁 파라택시스 코리아",        callback_data="sub:parataxis")],
+[InlineKeyboardButton("📁 파라택시스 이더리움",    callback_data="sub:parataxiseth")],
             [InlineKeyboardButton("📁 비트맥스",                callback_data="sub:bitmax")],
             [InlineKeyboardButton("📁 비트플래닛",              callback_data="sub:bitplanet")],
             [InlineKeyboardButton("📁 스트래티지",              callback_data="sub:microstrategy")],
@@ -172,6 +175,7 @@ def kb_subscribe(lang: str) -> InlineKeyboardMarkup:
         rows = [
             [InlineKeyboardButton("✅ All",               callback_data="sub:all")],
             [InlineKeyboardButton("📁 Parataxis Korea",   callback_data="sub:parataxis")],
+[InlineKeyboardButton("📁 Parataxis Ethereum", callback_data="sub:parataxiseth")],
             [InlineKeyboardButton("📁 Bitmax",            callback_data="sub:bitmax")],
             [InlineKeyboardButton("📁 Bitplanet",         callback_data="sub:bitplanet")],
             [InlineKeyboardButton("📁 Strategy",          callback_data="sub:microstrategy")],
