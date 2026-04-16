@@ -1,241 +1,1377 @@
 """
-news.py — RSS (Google News) + GDELT fallback.
-All blocking I/O is wrapped in asyncio.to_thread() so the Telegram
-event loop is never blocked.
+handlers.py — All Telegram command and callback handlers.
+
+Fixes applied:
+  - /watch and approval now call seed_seen_for_chat() to pre-populate
+    dedup tables with current items, preventing backlog spam on first run.
+  - All fetch calls are properly awaited (dart + news are async).
 """
 
-import asyncio
-import hashlib
 import logging
-import urllib.parse
-from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
 
-import feedparser
-import httpx
+from telegram import Update
+from telegram.constants import ParseMode
+from telegram.ext import ContextTypes
+
+import db
+from dart import get_disclosures
+from formatter import fmt_disclosures, fmt_news
+from keyboards import (
+    kb_after_price, kb_after_result, kb_approval,
+    kb_category, kb_language, kb_main, kb_price, kb_subscribe,
+    kb_subscribe_persistent, kb_unwatch_categories, kb_watch_categories,
+)
+from news import get_news
+from prices import fmt_price, fmt_stock_price, get_price, get_price_usd, get_stock_price_krw, PARATAXIS_TICKER
+from brief import BriefError, take_screenshot_with_timeout
+from luxor import LuxorError, fmt_mining_stats, get_mining_stats
 
 log = logging.getLogger(__name__)
 
-TIMEOUT = 15  # seconds per request
+# ── Constants ──────────────────────────────────────────────────────────────────
+ADMIN_USER_ID: int = 7205462694
 
-PARATAXIS_MAX_AGE_DAYS = 30
+_DART_COMPANIES = {"parataxis", "parataxiseth", "bitmax", "bitplanet"}
+_ALL_COMPANIES  = ["parataxis", "parataxiseth", "bitmax", "bitplanet", "microstrategy"]
 
-COMPANY_QUERIES: dict[str, list[str]] = {
-    "parataxis": [
-        "파라택시스코리아",
-        "파라택시스 코리아",
-        "288330",
-        "KOSDAQ 288330",
-        "PARATAXIS KOREA",
-    ],
-    "bitmax":        ["비트맥스", "Bitmax Korea"],
-    "bitplanet":     ["비트플래닛", "Bitplanet Korea"],
-    "parataxiseth":  ["파라택시스이더리움", "파라택시스 이더리움", "Parataxis Ethereum", "290560 KOSDAQ"],
-    "microstrategy": ["MicroStrategy", "MSTR bitcoin", "Strategy MicroStrategy"],
+_COMPANY_LABEL = {
+    "parataxis":     {"en": "Parataxis Korea", "ko": "파라택시스 코리아"},
+    "bitmax":        {"en": "Bitmax",          "ko": "비트맥스"},
+    "bitplanet":     {"en": "Bitplanet",       "ko": "비트플래닛"},
+    "parataxiseth":  {"en": "Parataxis Ethereum", "ko": "파라택시스 이더리움"},
+    "microstrategy": {"en": "Strategy",        "ko": "스트래티지"},
 }
 
 
-# ── URL normalisation ──────────────────────────────────────────────────────────
+def _is_admin(user_id: int | None) -> bool:
+    return user_id == ADMIN_USER_ID
 
-def _normalise_url(url: str) -> str:
-    """Strip tracking params and lowercase scheme+host for stable de-dup keys."""
-    url = url.strip()
+
+def _company_label(key: str, lang: str) -> str:
+    return _COMPANY_LABEL.get(key, {}).get(lang, key)
+
+
+def _main_prompt(lang: str) -> str:
+    return "메뉴를 선택하세요:" if lang == "ko" else "Select a menu:"
+
+
+# ── Seeding helper — call after any new subscription ──────────────────────────
+
+async def _seed_dedup_tables():
+    """
+    Fetch current top items for all companies and mark them as seen
+    WITHOUT sending alerts. Prevents backlog spam after a fresh subscribe.
+    Errors are swallowed — seeding is best-effort.
+    """
+    log.info("Seeding dedup tables for new subscription…")
+    news_by_company: dict[str, list[dict]] = {}
+    disc_by_company: dict[str, list[dict]] = {}
+
+    for company in _ALL_COMPANIES:
+        try:
+            items = await get_news(company, limit=10)
+            news_by_company[company] = items
+        except Exception as e:
+            log.warning("Seed news fetch failed for %s: %s", company, e)
+            news_by_company[company] = []
+
+    for company in _DART_COMPANIES:
+        try:
+            items = await get_disclosures(company, limit=10)
+            disc_by_company[company] = [it for it in items if "error" not in it]
+        except Exception as e:
+            log.warning("Seed disc fetch failed for %s: %s", company, e)
+            disc_by_company[company] = []
+
+    db.seed_seen_for_chat(news_by_company, disc_by_company)
+    log.info("Dedup seeding complete.")
+
+
+# ── /start — approval gate ─────────────────────────────────────────────────────
+
+async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+    db.log_event("start", user.id, user.username, chat_id)
+
+    if _is_admin(user.id):
+        db.approve_chat(chat_id)
+        await _show_language_prompt(update)
+        return
+
+    if db.is_approved(chat_id):
+        await _show_language_prompt(update)
+        return
+
+    db.request_access(chat_id)
+    await update.message.reply_text(
+        "🔒 Access restricted. Your request has been sent to the administrator.",
+        parse_mode=ParseMode.HTML,
+    )
+
+    username  = f"@{user.username}" if user.username else f"id:{user.id}"
+    name      = user.full_name or ""
+    admin_msg = (
+        f"🔐 <b>Access Request</b>\n\n"
+        f"User: {username} ({name})\n"
+        f"Chat ID: <code>{chat_id}</code>\n\n"
+        f"Approve or deny below:"
+    )
     try:
-        p    = urllib.parse.urlparse(url)
-        kept = [
-            (k, v) for k, v in urllib.parse.parse_qsl(p.query)
-            if not k.lower().startswith(("utm_", "ref", "source", "sid", "sref"))
-        ]
-        return urllib.parse.urlunparse(p._replace(
-            scheme=p.scheme.lower(),
-            netloc=p.netloc.lower(),
-            query=urllib.parse.urlencode(kept),
-        ))
-    except Exception:
-        return url
+        await ctx.bot.send_message(
+            chat_id=ADMIN_USER_ID,
+            text=admin_msg,
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb_approval(chat_id),
+        )
+    except Exception as e:
+        log.warning("Could not notify admin of access request: %s", e)
 
 
-def _url_key(url: str) -> str:
-    return hashlib.md5(_normalise_url(url).encode()).hexdigest()
+async def _show_language_prompt(update: Update):
+    """Show unified welcome + feature list + language selection in one message."""
+    await update.message.reply_text(
+        "👋 <b>Welcome to the Parataxis Family Bot</b>\n\n"
+        "🤖 <b>What you can do with this bot:</b>\n"
+        "• 📊 Subscribe to Daily Updates — BTC/ETH prices, stock prices, news feeds\n"
+        "• 🌐 Translate — /t + text for automatic Korean↔English translation\n"
+        "• 📝 Log Notes — /kakao to log meeting notes\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🤖 <b>이 봇으로 할 수 있는 것:</b>\n"
+        "• 📊 데일리 업데이트 구독 — BTC/ETH 가격, 주식, 뉴스\n"
+        "• 🌐 번역 — /t + 텍스트로 자동 한국어↔영어 번역\n"
+        "• 📝 메모 기록 — /kakao 로 회의 메모 로그\n\n"
+        "Select your preferred language / 언어를 선택해 주세요:",
+        reply_markup=kb_language(),
+        parse_mode=ParseMode.HTML,
+    )
 
 
-# ── Time parsing ──────────────────────────────────────────────────────────────
+# ── /help ─────────────────────────────────────────────────────────────────────
 
-def _parse_entry_dt(entry) -> datetime | None:
-    """
-    Return a timezone-aware datetime from a feedparser entry, or None.
+async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    lang = db.get_lang(update.effective_chat.id)
+    if lang == "ko":
+        text = (
+            "<b>📖 도움말</b>\n\n"
+            "• /start — 시작 및 언어 선택\n"
+            "• /subscribe — 구독 관리 (체크박스 메뉴)\n"
+            "• /status — 구독 상태 확인\n"
+            "• /brief — BTC + ETH 대시보드 스크린샷\n"
+            "• /daily — 데일리 스냅샷 (가격 + 주식 + 채굴)\n"
+            "• /mining — 채굴 현황 보기\n"
+            "• /t <텍스트> — 한국어↔영어 번역\n"
+            "• /kakao <메모> — 회의 메모 기록\n"
+            "• /help — 이 도움말"
+        )
+    else:
+        text = (
+            "<b>📖 Help</b>\n\n"
+            "• /start — Welcome screen & language selection\n"
+            "• /subscribe — Manage subscriptions (checkbox menu)\n"
+            "• /status — Check your current subscriptions\n"
+            "• /brief — BTC + ETH dashboard screenshots\n"
+            "• /daily — Daily snapshot (prices + stocks + mining)\n"
+            "• /mining — Get mining stats right now\n"
+            "• /t <text> — Translate Korean↔English\n"
+            "• /kakao <note> — Log a meeting note\n"
+            "• /help — This message"
+        )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
-    Tries the raw RFC-2822 string first (better tz fidelity), then falls back
-    to feedparser's pre-parsed struct_time.
 
-    Defensively normalises any naive datetime to UTC so comparisons with
-    timezone-aware cutoff values never raise TypeError.
-    """
-    # Raw string path — preserves explicit timezone offset
-    for field in ("published", "updated"):
-        raw = entry.get(field, "")
-        if raw:
+
+# ── Subscription key mapping ──────────────────────────────────────────────────
+
+_SUB2_MAP = {
+    # sub2 key -> list of (company, category) pairs to subscribe/unsubscribe
+    "coin_prices":    [("brief", "brief")],          # reuses brief slot for price alerts
+    "stock_prices":   [("daily", "daily")],           # reuses daily slot for stock alerts
+    "daily_brief":    [("brief", "brief")],
+    "mining":         [("mining", "mining")],
+    "daily_snapshot": [("daily", "daily")],
+}
+
+def _get_sub2_state(chat_id: int) -> set:
+    """Return set of active sub2 keys for a chat."""
+    subs = db.get_subscriptions(chat_id)
+    active = set()
+    company_cats = {(s["company"], s["category"]) for s in subs}
+    if ("brief", "brief") in company_cats:
+        active.add("coin_prices")
+        active.add("daily_brief")
+    if ("mining", "mining") in company_cats:
+        active.add("mining")
+    if ("daily", "daily") in company_cats:
+        active.add("stock_prices")
+        active.add("daily_snapshot")
+    # Parataxis news: both parataxis and parataxiseth news subscribed
+    if ("parataxis", "news") in company_cats and ("parataxiseth", "news") in company_cats:
+        active.add("parataxis_news")
+    # Competitor news: bitmax + bitplanet news subscribed
+    if ("bitmax", "news") in company_cats and ("bitplanet", "news") in company_cats:
+        active.add("competitor_news")
+    return active
+
+
+
+# ── /subscribe ────────────────────────────────────────────────────────────────
+
+async def cmd_subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Show persistent checkbox-style subscription menu."""
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+    lang    = db.get_lang(chat_id)
+
+    if not _is_admin(user.id) and not db.is_approved(chat_id):
+        await update.message.reply_text("🔒 Access restricted.")
+        return
+
+    state = _get_sub2_state(chat_id)
+    prompt = (
+        "🔔 <b>구독 관리</b>\n\n구독 항목을 선택하거나 해제하세요:"
+        if lang == "ko" else
+        "🔔 <b>Subscription Manager</b>\n\nTap to toggle subscriptions on or off:"
+    )
+    await update.message.reply_text(
+        prompt,
+        reply_markup=kb_subscribe_persistent(lang, state),
+        parse_mode=ParseMode.HTML,
+    )
+
+# ── /watch ────────────────────────────────────────────────────────────────────
+
+async def cmd_watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+    lang    = db.get_lang(chat_id)
+
+    if not _is_admin(user.id) and not db.is_approved(chat_id):
+        await update.message.reply_text("🔒 Access restricted.")
+        return
+
+    args = ctx.args or []
+    arg  = args[0].lower() if args else ""
+    db.log_event("watch", user.id, user.username, chat_id, arg or "menu")
+
+    is_first = not db.has_any_subscription(chat_id)
+
+    if arg in ("news", "기사"):
+        for company in _ALL_COMPANIES:
+            db.subscribe(chat_id, company, "news")
+        msg = (
+            "기사 알림이 모든 회사에 대해 활성화되었습니다. ✅"
+            if lang == "ko" else
+            "Subscribed to <b>News</b> alerts for all companies. ✅"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+        if is_first:
+            ctx.application.create_task(_seed_dedup_tables())
+
+    elif arg in ("disclosures", "disclosure", "공시"):
+        for company in _DART_COMPANIES:
+            db.subscribe(chat_id, company, "disclosures")
+        msg = (
+            "공시 알림이 활성화되었습니다. ✅"
+            if lang == "ko" else
+            "Subscribed to <b>Disclosures</b> alerts. ✅"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+        if is_first:
+            ctx.application.create_task(_seed_dedup_tables())
+
+    elif arg in ("brief", "브리프"):
+        db.subscribe(chat_id, "brief", "brief")
+        msg = (
+            "데일리 마켓 브리프 구독이 활성화되었습니다. 매일 오전 10시에 받으실 수 있습니다. ✅"
+            if lang == "ko" else
+            "Subscribed to the <b>Daily Market Brief</b>. You'll receive it every day at 10:00 KST. ✅"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+    elif arg in ("mining", "채굴"):
+        db.subscribe(chat_id, "mining", "mining")
+        msg = (
+            "채굴 현황 알림이 활성화되었습니다. ✅"
+            if lang == "ko" else
+            "Subscribed to <b>Mining Updates</b>. ✅"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+    elif arg in ("daily", "데일리"):
+        db.subscribe(chat_id, "daily", "daily")
+        msg = (
+            "데일리 스냅샷 구독이 활성화되었습니다. 매일 오전 9시에 받으실 수 있습니다. ✅"
+            if lang == "ko" else
+            "Subscribed to the <b>Daily Snapshot</b>. You'll receive it every day at 9:00 KST. ✅"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+    else:
+        msg = (
+            "사용법: /watch news | disclosures | brief | mining | daily"
+            if lang == "ko" else
+            "Usage: /watch news | disclosures | brief | mining | daily"
+        )
+        await update.message.reply_text(msg)
+
+
+# ── /unwatch ──────────────────────────────────────────────────────────────────
+
+async def cmd_unwatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+    lang    = db.get_lang(chat_id)
+    args    = ctx.args or []
+    arg     = args[0].lower() if args else ""
+    db.log_event("unwatch", user.id, user.username, chat_id, arg or "menu")
+
+    if arg in ("news", "기사"):
+        db.unsubscribe(chat_id, category="news")
+        msg = "기사 알림이 해제되었습니다. 🔕" if lang == "ko" else "Unsubscribed from <b>News</b> alerts. 🔕"
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    elif arg in ("disclosures", "disclosure", "공시"):
+        db.unsubscribe(chat_id, category="disclosures")
+        msg = "공시 알림이 해제되었습니다. 🔕" if lang == "ko" else "Unsubscribed from <b>Disclosures</b> alerts. 🔕"
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    elif arg in ("brief", "브리프"):
+        db.unsubscribe(chat_id, company="brief", category="brief")
+        msg = (
+            "데일리 마켓 브리프 구독이 해제되었습니다. 🔕"
+            if lang == "ko" else
+            "Unsubscribed from the <b>Daily Market Brief</b>. 🔕"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    elif arg in ("mining", "채굴"):
+        db.unsubscribe(chat_id, company="mining", category="mining")
+        msg = (
+            "채굴 현황 알림이 해제되었습니다. 🔕"
+            if lang == "ko" else
+            "Unsubscribed from <b>Mining Updates</b>. 🔕"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    elif arg in ("daily", "데일리"):
+        db.unsubscribe(chat_id, company="daily", category="daily")
+        msg = (
+            "데일리 스냅샷 구독이 해제되었습니다. 🔕"
+            if lang == "ko" else
+            "Unsubscribed from <b>Daily Snapshot</b>. 🔕"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    elif arg in ("all", "전체"):
+        db.unsubscribe(chat_id)
+        msg = "모든 알림이 해제되었습니다. 🔕" if lang == "ko" else "Unsubscribed from all alerts. 🔕"
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+    else:
+        prompt = "취소할 카테고리를 선택하세요:" if lang == "ko" else "Select what to unsubscribe from:"
+        await update.message.reply_text(
+            prompt,
+            reply_markup=kb_unwatch_categories(lang),
+            parse_mode=ParseMode.HTML,
+        )
+
+
+# ── /status ───────────────────────────────────────────────────────────────────
+
+async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    lang    = db.get_lang(chat_id)
+    subs    = db.get_subscriptions(chat_id)
+
+    if not subs:
+        msg = "알림 구독 없음." if lang == "ko" else "Not subscribed to any alerts."
+        await update.message.reply_text(msg)
+        return
+
+    by_company: dict[str, list[str]] = {}
+    for s in subs:
+        by_company.setdefault(s["company"], []).append(s["category"])
+
+    lines = ["<b>구독 상태</b>" if lang == "ko" else "<b>Subscription Status</b>", ""]
+    for company in _ALL_COMPANIES:
+        cats = by_company.get(company)
+        if cats:
+            label    = _company_label(company, lang)
+            cats_str = ", ".join(sorted(cats))
+            lines.append(f"✅ <b>{label}</b>: {cats_str}")
+    if by_company.get("brief"):
+        brief_label = "데일리 마켓 브리프 (매일 오전 10시)" if lang == "ko" else "Daily Market Brief (10:00 KST daily)"
+        lines.append(f"✅ <b>{brief_label}</b>")
+    if by_company.get("mining"):
+        mining_label = "채굴 현황 알림" if lang == "ko" else "Mining Updates"
+        lines.append(f"✅ <b>{mining_label}</b>")
+    if by_company.get("daily"):
+        daily_label = "데일리 스냅샷 (매일 오전 9시)" if lang == "ko" else "Daily Snapshot (9:00 KST daily)"
+        lines.append(f"✅ <b>{daily_label}</b>")
+
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+# ── /audit (admin only) ───────────────────────────────────────────────────────
+
+async def cmd_audit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id if update.effective_user else None):
+        await update.message.reply_text("Command not recognized.")
+        return
+    rows = db.get_recent_audit(20)
+    if not rows:
+        await update.message.reply_text("No audit records yet.")
+        return
+    lines = ["<b>🔍 Audit Log (last 20)</b>\n"]
+    for r in rows:
+        who = f"@{r['username']}" if r["username"] else str(r["user_id"])
+        ps  = f"  <code>{(r['payload'] or '')[:60]}</code>" if r["payload"] else ""
+        lines.append(f"<code>{r['timestamp']}</code> | {who}\n  <b>{r['event_type']}</b>{ps}")
+    msg = "\n".join(lines)
+    if len(msg) > 4000:
+        msg = msg[:4000] + "\n…(truncated)"
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+
+# ── /users (admin only) ───────────────────────────────────────────────────────
+
+async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not _is_admin(update.effective_user.id if update.effective_user else None):
+        await update.message.reply_text("Command not recognized.")
+        return
+    rows = db.get_recent_users(20)
+    if not rows:
+        await update.message.reply_text("No users recorded yet.")
+        return
+    lines = ["<b>👥 Recent Users (last 20)</b>\n"]
+    for i, r in enumerate(rows, 1):
+        who = f"@{r['username']}" if r["username"] else f"id:{r['user_id']}"
+        lines.append(
+            f"{i}. {who}  (<code>{r['user_id']}</code>)\n"
+            f"   Last seen: <code>{r['last_seen']}</code>"
+        )
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+# ── /subs (admin only) ────────────────────────────────────────────────────────
+
+async def cmd_subs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Show all active subscriptions grouped by chat."""
+    if not _is_admin(update.effective_user.id if update.effective_user else None):
+        await update.message.reply_text("Command not recognized.")
+        return
+
+    rows = db.get_all_subscriptions()
+    if not rows:
+        await update.message.reply_text("No active subscriptions.")
+        return
+
+    # Group by chat_id
+    from collections import defaultdict
+    by_chat = defaultdict(list)
+    for r in rows:
+        by_chat[r["chat_id"]].append(f"{r['company']}:{r['category']}")
+
+    lines = ["<b>📋 Active Subscriptions</b>\n"]
+    for i, (chat_id, subs) in enumerate(by_chat.items(), 1):
+        lines.append(f"{i}. <code>{chat_id}</code>\n   {', '.join(subs)}")
+
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+# ── /announcement (admin only) ───────────────────────────────────────────────
+
+async def cmd_announcement(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not _is_admin(user.id if user else None):
+        await update.message.reply_text("Command not recognized.")
+        return
+
+    # Parse raw text to preserve newlines — ctx.args splits on all whitespace
+    raw   = (update.message.text or "").strip()
+    parts = raw.split(None, 1)          # split on first whitespace run
+    msg   = parts[1] if len(parts) > 1 else ""
+    if not msg:
+        await update.message.reply_text("Usage: /announcement <message>")
+        return
+
+    text = "📢 <b>Bot Announcement</b>\n\n" + msg
+    chat_ids = db.get_approved_chats()
+    sent = 0
+    for chat_id in chat_ids:
+        try:
+            await ctx.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
+            sent += 1
+        except Exception as exc:
+            log.warning("[announcement] failed to send to %s: %s", chat_id, exc)
+
+    await update.message.reply_text(f"✅ Announcement sent to {sent}/{len(chat_ids)} chats.")
+
+
+# ── Callback dispatcher ───────────────────────────────────────────────────────
+
+async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query   = update.callback_query
+    await query.answer()
+    data    = query.data or ""
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+    lang    = db.get_lang(chat_id)
+
+    # ── Admin approval ──────────────────────────────────────────────────
+    if data.startswith("approve:") or data.startswith("deny:"):
+        if not _is_admin(user.id):
+            return
+        action, target_str = data.split(":", 1)
+        target_id = int(target_str)
+
+        if action == "approve":
+            db.approve_chat(target_id)
+            db.subscribe_default(target_id)
+            await query.edit_message_text(
+                f"✅ Approved chat <code>{target_id}</code>.", parse_mode=ParseMode.HTML
+            )
+            # Seed dedup so the newly approved chat doesn't get spammed
             try:
-                dt = parsedate_to_datetime(raw)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                return dt
-            except Exception:
-                pass
-
-    # Struct-time fallback — treat as UTC
-    for field in ("published_parsed", "updated_parsed"):
-        t = entry.get(field)
-        if t:
+                await _seed_dedup_tables()
+            except Exception as e:
+                log.warning("Seed failed after approval: %s", e)
             try:
-                return datetime(*t[:6], tzinfo=timezone.utc)
-            except Exception:
-                pass
+                tl  = db.get_lang(target_id)
+                msg = (
+                    "✅ 접근이 승인되었습니다. /start 를 눌러 시작하세요."
+                    if tl == "ko" else
+                    "✅ Access approved. Press /start to begin."
+                )
+                await ctx.bot.send_message(chat_id=target_id, text=msg)
+            except Exception as e:
+                log.warning("Could not notify approved user %d: %s", target_id, e)
+        else:
+            db.deny_chat(target_id)
+            await query.edit_message_text(
+                f"❌ Denied chat <code>{target_id}</code>.", parse_mode=ParseMode.HTML
+            )
+        return
 
-    return None
+    # ── Access gate ─────────────────────────────────────────────────────
+    if not _is_admin(user.id) and not db.is_approved(chat_id):
+        await query.edit_message_text("🔒 Access restricted.")
+        return
+
+    # ── Language selection ──────────────────────────────────────────────
+    if data.startswith("lang:"):
+        selected_lang = data.split(":")[1]
+        db.set_lang(chat_id, selected_lang)
+        db.log_event("click", user.id, user.username, chat_id, data)
+        if selected_lang == "ko":
+            welcome_text = (
+                "✅ 언어가 <b>한국어</b>로 설정되었습니다.\n\n"
+                "🤖 <b>파라택시스 패밀리 봇으로 할 수 있는 것:</b>\n\n"
+                "• 📊 <b>데일리 업데이트 구독</b> — BTC/ETH 가격, 주식 가격, 뉴스 피드\n"
+                "• 🌐 <b>번역</b> — /t + 텍스트로 자동 한국어↔영어 번역\n"
+                "• 📝 <b>메모 기록</b> — /kakao 로 회의 메모 로그\n\n"
+                "아래 메뉴에서 선택하세요:"
+            )
+        else:
+            welcome_text = (
+                "✅ Language set to <b>English</b>.\n\n"
+                "🤖 <b>What you can do with this bot:</b>\n\n"
+                "• 📊 <b>Subscribe to Daily Updates</b> — BTC/ETH prices, stock prices, news feeds\n"
+                "• 🌐 <b>Translate</b> — /t + text to auto-translate Korean↔English\n"
+                "• 📝 <b>Log Notes</b> — /kakao to log meeting notes\n\n"
+                "Select from the menu below:"
+            )
+        await query.edit_message_text(
+            welcome_text,
+            reply_markup=kb_main(selected_lang),
+            parse_mode=ParseMode.HTML,
+        )
+
+    # ── Navigation ──────────────────────────────────────────────────────
+    elif data == "nav:home":
+        db.log_event("click", user.id, user.username, chat_id, data)
+        await query.edit_message_text(
+            "🌏 <b>Parataxis Korea Alert Bot</b>\n\nPlease select your language:",
+            reply_markup=kb_language(),
+            parse_mode=ParseMode.HTML,
+        )
+
+    elif data == "nav:main":
+        db.log_event("click", user.id, user.username, chat_id, data)
+        await query.edit_message_text(
+            _main_prompt(lang), reply_markup=kb_main(lang), parse_mode=ParseMode.HTML,
+        )
+
+    elif data.startswith("nav:back_to_cat:"):
+        company = data.split(":")[2]
+        db.log_event("click", user.id, user.username, chat_id, data)
+        label  = _company_label(company, lang)
+        prompt = (
+            f"<b>{label}</b> 카테고리를 선택하세요:"
+            if lang == "ko" else
+            f"Select category for <b>{label}</b>:"
+        )
+        await query.edit_message_text(
+            prompt, reply_markup=kb_category(lang, company), parse_mode=ParseMode.HTML,
+        )
+
+    # ── Price ────────────────────────────────────────────────────────────
+    elif data == "menu:price":
+        db.log_event("click", user.id, user.username, chat_id, data)
+        prompt = "코인을 선택하세요:" if lang == "ko" else "Select a coin:"
+        await query.edit_message_text(
+            prompt, reply_markup=kb_price(lang), parse_mode=ParseMode.HTML,
+        )
+
+    elif data.startswith("price:stock:"):
+        # Stock price handler (e.g. Parataxis Korea KOSDAQ 288330)
+        ticker = data.split(":")[2]
+        db.log_event("click", user.id, user.username, chat_id, data)
+        await query.edit_message_text("⏳ Fetching stock price…")
+        result = await get_stock_price_krw(ticker)
+        await query.edit_message_text(
+            fmt_stock_price(result, lang),
+            reply_markup=kb_after_price(lang),
+            parse_mode=ParseMode.HTML,
+        )
+
+    elif data.startswith("price:"):
+        coin = data.split(":")[1]
+        db.log_event("click", user.id, user.username, chat_id, data)
+        await query.edit_message_text("⏳ Fetching price…")
+        result = await get_price(coin, lang)
+        await query.edit_message_text(
+            fmt_price(result, lang),
+            reply_markup=kb_after_price(lang),
+            parse_mode=ParseMode.HTML,
+        )
+
+    # ── Company selection ───────────────────────────────────────────────
+    elif data.startswith("company:"):
+        company = data.split(":")[1]
+        db.log_event("click", user.id, user.username, chat_id, data)
+        label  = _company_label(company, lang)
+        prompt = (
+            f"<b>{label}</b> 카테고리를 선택하세요:"
+            if lang == "ko" else
+            f"Select category for <b>{label}</b>:"
+        )
+        await query.edit_message_text(
+            prompt, reply_markup=kb_category(lang, company), parse_mode=ParseMode.HTML,
+        )
+
+    # ── Category selection ──────────────────────────────────────────────
+    elif data.startswith("cat:"):
+        parts    = data.split(":")
+        category = parts[1]
+        company  = parts[2]
+        db.log_event("click", user.id, user.username, chat_id, data)
+
+        if category == "search":
+            ctx.user_data["pending_search"] = {"company": company}
+            prompt = (
+                f"🔍 검색어를 입력하세요 (<b>{_company_label(company, lang)}</b>):"
+                if lang == "ko" else
+                f"🔍 Type your search query for <b>{_company_label(company, lang)}</b>:"
+            )
+            await query.edit_message_text(prompt, parse_mode=ParseMode.HTML)
+            return
+
+        await query.edit_message_text("⏳ Fetching…")
+        text = await _fetch_text(company, category, lang)
+        await query.edit_message_text(
+            text,
+            reply_markup=kb_after_result(lang, company),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+
+    # ── Subscribe menu ─────────────────────────────────────────────────
+    elif data == "menu:logs":
+        from sheets import SHEET_URL, WATCHLIST_SHEET_URL
+        wl = WATCHLIST_SHEET_URL
+        kk = SHEET_URL
+        if lang == "ko":
+            msg = "<b>📋 로그 & 기록</b>\n\n📰 <a href='" + wl + "'>뉴스 & 공시 워치리스트</a>\n💬 <a href='" + kk + "'>카카오 미팅 로그</a>"
+        else:
+            msg = "<b>📋 Logs & Records</b>\n\n📰 <a href='" + wl + "'>News & Disclosure Watchlist</a>\n💬 <a href='" + kk + "'>Kakao Meeting Log</a>"
+        nav = kb_after_result(lang, "parataxis")
+        await query.edit_message_text(msg, reply_markup=nav, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+    elif data == "menu:translate_help":
+        nav = kb_after_result(lang, "parataxis")
+        await query.edit_message_text(_T_HELP, reply_markup=nav, parse_mode=ParseMode.HTML)
+
+    # ── sub2: persistent toggle subscriptions ──────────────────────────────────
+    elif data.startswith("sub2:"):
+        key = data.split(":")[1]
+        db.log_event("click", user.id, user.username, chat_id, data)
+        state = _get_sub2_state(chat_id)
+        is_first = not db.has_any_subscription(chat_id)
+
+        if key == "coin_prices":
+            if "coin_prices" in state:
+                # Turning off coin prices also turns off daily brief
+                db.unsubscribe(chat_id, company="brief", category="brief")
+            else:
+                # Turning on coin prices also turns on daily brief
+                db.subscribe(chat_id, "brief", "brief")
+                if is_first:
+                    ctx.application.create_task(_seed_dedup_tables())
+
+        elif key == "stock_prices":
+            if "stock_prices" in state:
+                # Turning off stock prices also turns off daily snapshot
+                db.unsubscribe(chat_id, company="daily", category="daily")
+            else:
+                # Turning on stock prices also turns on daily snapshot
+                db.subscribe(chat_id, "daily", "daily")
+
+        elif key == "daily_brief":
+            if "daily_brief" in state:
+                db.unsubscribe(chat_id, company="brief", category="brief")
+            else:
+                db.subscribe(chat_id, "brief", "brief")
+                if is_first:
+                    ctx.application.create_task(_seed_dedup_tables())
+
+        elif key == "mining":
+            if "mining" in state:
+                db.unsubscribe(chat_id, company="mining", category="mining")
+            else:
+                db.subscribe(chat_id, "mining", "mining")
+
+        elif key == "daily_snapshot":
+            if "daily_snapshot" in state:
+                db.unsubscribe(chat_id, company="daily", category="daily")
+            else:
+                db.subscribe(chat_id, "daily", "daily")
+
+        elif key == "parataxis_news":
+            # Parataxis news feeds = parataxis + parataxiseth news + disclosures
+            if "parataxis_news" in state:
+                for co in ("parataxis", "parataxiseth"):
+                    db.unsubscribe(chat_id, company=co, category="news")
+                    db.unsubscribe(chat_id, company=co, category="disclosures")
+            else:
+                for co in ("parataxis", "parataxiseth"):
+                    db.subscribe(chat_id, co, "news")
+                    db.subscribe(chat_id, co, "disclosures")
+                if is_first:
+                    ctx.application.create_task(_seed_dedup_tables())
+
+        elif key == "competitor_news":
+            # Competitor news = bitmax + bitplanet + microstrategy news + disclosures
+            if "competitor_news" in state:
+                for co in ("bitmax", "bitplanet"):
+                    db.unsubscribe(chat_id, company=co, category="news")
+                    db.unsubscribe(chat_id, company=co, category="disclosures")
+                db.unsubscribe(chat_id, company="microstrategy", category="news")
+            else:
+                for co in ("bitmax", "bitplanet"):
+                    db.subscribe(chat_id, co, "news")
+                    db.subscribe(chat_id, co, "disclosures")
+                db.subscribe(chat_id, "microstrategy", "news")
+                if is_first:
+                    ctx.application.create_task(_seed_dedup_tables())
+
+        # Refresh the menu with updated state
+        new_state = _get_sub2_state(chat_id)
+        prompt = (
+            "🔔 <b>구독 관리</b>\n\n구독 항목을 선택하거나 해제하세요:"
+            if lang == "ko" else
+            "🔔 <b>Subscription Manager</b>\n\nTap to toggle subscriptions on or off:"
+        )
+        await query.edit_message_text(
+            prompt,
+            reply_markup=kb_subscribe_persistent(lang, new_state),
+            parse_mode=ParseMode.HTML,
+        )
+
+    elif data == "menu:subscribe":
+        state = _get_sub2_state(chat_id)
+        prompt = (
+            "🔔 <b>구독 관리</b>\n\n구독 항목을 선택하거나 해제하세요:"
+            if lang == "ko" else
+            "🔔 <b>Subscription Manager</b>\n\nTap to toggle subscriptions on or off:"
+        )
+        await query.edit_message_text(
+            prompt, reply_markup=kb_subscribe_persistent(lang, state), parse_mode=ParseMode.HTML,
+        )
+
+    # ── Subscribe via menu buttons ──────────────────────────────────────
+    elif data.startswith("sub:"):
+        topic    = data.split(":", 1)[1]
+        is_first = not db.has_any_subscription(chat_id)
+        db.log_event("click", user.id, user.username, chat_id, data)
+
+        if topic == "all":
+            db.subscribe_default(chat_id)
+            db.subscribe(chat_id, "brief",  "brief")
+            db.subscribe(chat_id, "mining", "mining")
+            db.subscribe(chat_id, "daily",  "daily")
+            msg = "모든 항목 구독이 활성화되었습니다. ✅" if lang == "ko" else "Subscribed to everything. ✅"
+        elif topic in ("parataxis", "parataxiseth", "bitmax", "bitplanet", "microstrategy"):
+            db.subscribe(chat_id, topic, "news")
+            if topic not in ("microstrategy",):
+                db.subscribe(chat_id, topic, "disclosures")
+            label = {"parataxis": "Parataxis Korea", "parataxiseth": "Parataxis Ethereum",
+                     "bitmax": "Bitmax", "bitplanet": "Bitplanet", "microstrategy": "Strategy"}[topic]
+            msg = f"{label} 알림이 활성화되었습니다. ✅" if lang == "ko" else f"Subscribed to <b>{label}</b> alerts. ✅"
+        elif topic == "brief":
+            db.subscribe(chat_id, "brief", "brief")
+            msg = "가격 업데이트 구독이 활성화되었습니다. ✅" if lang == "ko" else "Subscribed to <b>Price Updates</b> (Daily Market Brief). ✅"
+        elif topic == "mining":
+            db.subscribe(chat_id, "mining", "mining")
+            msg = "채굴 현황 알림이 활성화되었습니다. ✅" if lang == "ko" else "Subscribed to <b>Mining Updates</b>. ✅"
+        elif topic == "daily":
+            db.subscribe(chat_id, "daily", "daily")
+            msg = "데일리 스냅샷 구독이 활성화되었습니다. ✅" if lang == "ko" else "Subscribed to <b>Daily Snapshot</b>. ✅"
+        else:
+            msg = "알 수 없는 항목입니다." if lang == "ko" else "Unknown subscription topic."
+
+        if is_first and topic in ("all", "parataxis", "parataxiseth", "bitmax", "bitplanet", "microstrategy"):
+            await query.edit_message_text("⏳ Setting up alerts…")
+            await _seed_dedup_tables()
+
+        await query.edit_message_text(msg, parse_mode=ParseMode.HTML)
+
+    # ── Watch via buttons ───────────────────────────────────────────────
+    elif data.startswith("watch:"):
+        parts    = data.split(":")
+        category = parts[2] if len(parts) > 2 else "all"
+        db.log_event("click", user.id, user.username, chat_id, data)
+        is_first = not db.has_any_subscription(chat_id)
+
+        if category == "all":
+            db.subscribe_default(chat_id)
+            msg = "모든 알림이 활성화되었습니다. ✅" if lang == "ko" else "Subscribed to all alerts. ✅"
+        elif category == "news":
+            for company in _ALL_COMPANIES:
+                db.subscribe(chat_id, company, "news")
+            msg = "기사 알림이 활성화되었습니다. ✅" if lang == "ko" else "Subscribed to News alerts. ✅"
+        else:
+            for company in _DART_COMPANIES:
+                db.subscribe(chat_id, company, "disclosures")
+            msg = "공시 알림이 활성화되었습니다. ✅" if lang == "ko" else "Subscribed to Disclosures alerts. ✅"
+
+        if is_first:
+            await query.edit_message_text("⏳ Setting up alerts…")
+            await _seed_dedup_tables()
+
+        await query.edit_message_text(msg, parse_mode=ParseMode.HTML)
+
+    # ── Unwatch via buttons ─────────────────────────────────────────────
+    elif data.startswith("unwatch:"):
+        parts    = data.split(":")
+        category = parts[2] if len(parts) > 2 else "all"
+        db.log_event("click", user.id, user.username, chat_id, data)
+
+        if category == "all":
+            db.unsubscribe(chat_id)
+            msg = "모든 알림이 해제되었습니다. 🔕" if lang == "ko" else "Unsubscribed from all alerts. 🔕"
+        elif category == "news":
+            db.unsubscribe(chat_id, category="news")
+            msg = "기사 알림이 해제되었습니다. 🔕" if lang == "ko" else "Unsubscribed from News alerts. 🔕"
+        else:
+            db.unsubscribe(chat_id, category="disclosures")
+            msg = "공시 알림이 해제되었습니다. 🔕" if lang == "ko" else "Unsubscribed from Disclosures alerts. 🔕"
+
+        await query.edit_message_text(msg, parse_mode=ParseMode.HTML)
+
+    else:
+        log.warning("Unhandled callback: %s", data)
 
 
-def _dt_to_display(dt: datetime | None) -> str:
-    if dt is None:
-        return ""
+# ── Free text (search) ────────────────────────────────────────────────────────
+
+async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+    lang    = db.get_lang(chat_id)
+    text    = (update.message.text or "").strip()
+
+    if not _is_admin(user.id) and not db.is_approved(chat_id):
+        await update.message.reply_text("🔒 Access restricted. Use /start to request access.")
+        return
+
+    pending = ctx.user_data.get("pending_search")
+    if pending:
+        ctx.user_data.pop("pending_search")
+        company  = pending["company"]
+        db.log_event("search", user.id, user.username, chat_id, f"{company}|{text[:200]}")
+        category = _detect_category(text, company) or "news"
+        result   = await _fetch_text(company, category, lang)
+        await update.message.reply_text(
+            result,
+            reply_markup=kb_after_result(lang, company),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return
+
+    company  = _detect_company(text)
+    category = _detect_category(text, company)
+
+    if company and category:
+        db.log_event("search", user.id, user.username, chat_id, f"{company}|{category}|{text[:200]}")
+        result = await _fetch_text(company, category, lang)
+        await update.message.reply_text(
+            result,
+            reply_markup=kb_after_result(lang, company),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+    else:
+        hint = (
+            "🤔 검색어를 이해하지 못했습니다.\n/start 로 메뉴를 여세요."
+            if lang == "ko" else
+            "🤔 I couldn't detect a company or category.\nUse /start to open the menu."
+        )
+        await update.message.reply_text(hint, reply_markup=kb_language(), parse_mode=ParseMode.HTML)
+
+
+# ── Shared fetch ──────────────────────────────────────────────────────────────
+
+async def _fetch_text(company: str, category: str, lang: str) -> str:
+    if category == "disclosures" and company in _DART_COMPANIES:
+        items = await get_disclosures(company)
+        return fmt_disclosures(items, lang)
+    items = await get_news(company)
+    return fmt_news(items, lang)
+
+
+# ── NLP helpers ───────────────────────────────────────────────────────────────
+
+def _detect_company(text: str) -> str:
+    t = text.lower()
+    if "파라택시스 이더리움" in t or "parataxiseth" in t or "290560" in t:
+        return "parataxiseth"
+    if "파라택시스" in t or "parataxis" in t:
+        return "parataxis"
+    if "비트맥스" in t or "bitmax" in t:
+        return "bitmax"
+    if "비트플래닛" in t or "bitplanet" in t:
+        return "bitplanet"
+    if "microstrategy" in t or "mstr" in t or "스트래티지" in t:
+        return "microstrategy"
+    return ""
+
+
+def _detect_category(text: str, company: str = "") -> str:
+    if company == "microstrategy":
+        return "news"
+    t = text.lower()
+    for kw in ["공시", "disclosure", "dart", "filing", "report"]:
+        if kw in t:
+            return "disclosures"
+    for kw in ["기사", "news", "article", "뉴스", "언론"]:
+        if kw in t:
+            return "news"
+    return ""
+
+
+# ── /brief ─────────────────────────────────────────────────────────────────────
+
+async def cmd_brief(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    On-demand dashboard screenshot — sends both BTC and ETH tracker screenshots.
+    Works regardless of subscription status.
+    """
+    import asyncio as _asyncio
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+    lang    = db.get_lang(chat_id)
+
+    if not _is_admin(user.id) and not db.is_approved(chat_id):
+        await update.message.reply_text("🔒 Access restricted.")
+        return
+
+    db.log_event("brief", user.id, user.username, chat_id)
+    wait_msg = "⏳ 대시보드 스크린샷 캡처 중…" if lang == "ko" else "⏳ Capturing dashboard screenshots…"
+    sent = await update.message.reply_text(wait_msg)
+
+    # Fetch BTC and ETH screenshots sequentially (Playwright can't run two at once)
+    btc_bytes = eth_bytes = None
     try:
-        return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
-    except Exception:
-        return ""
+        btc_bytes = await take_screenshot_with_timeout(lang, "btc")
+    except BriefError as exc:
+        log.error("cmd_brief BTC screenshot error: %s", exc)
 
-
-# ── RSS fetch ──────────────────────────────────────────────────────────────────
-
-def _rss_url(query: str) -> str:
-    return (
-        f"https://news.google.com/rss/search"
-        f"?q={urllib.parse.quote(query)}&hl=ko&gl=KR&ceid=KR:ko"
-    )
-
-
-def _fetch_rss_sync(query: str, limit: int) -> list[dict]:
-    """
-    Fetch one RSS query. Items carry an internal '_dt' key (datetime | None)
-    for sorting; strip it before returning results to consumers.
-    """
     try:
-        feed = feedparser.parse(_rss_url(query))
-        items = []
-        for e in feed.entries[:limit]:
-            dt = _parse_entry_dt(e)
-            items.append({
-                "title":     e.get("title", ""),
-                "publisher": e.get("source", {}).get("title", ""),
-                "time":      _dt_to_display(dt),
-                "url":       e.get("link", ""),
-                "_dt":       dt,
-            })
-        return items
-    except Exception as exc:
-        log.warning("RSS fetch failed for '%s': %s", query, exc)
-        return []
+        eth_bytes = await take_screenshot_with_timeout(lang, "eth")
+    except BriefError as exc:
+        log.error("cmd_brief ETH screenshot error: %s", exc)
 
+    await sent.delete()
 
-def _strip_dt(item: dict) -> dict:
-    return {k: v for k, v in item.items() if k != "_dt"}
+    if not btc_bytes and not eth_bytes:
+        err_msg = (
+            "⚠️ 스크린샷을 가져오지 못했습니다. 잠시 후 다시 시도해 주세요."
+            if lang == "ko" else
+            "⚠️ Could not capture dashboard screenshots. Please try again shortly."
+        )
+        await update.message.reply_text(err_msg)
+        return
 
+    if btc_bytes:
+        caption = "📊 Bitcoin Dashboard" if lang == "en" else "📊 비트코인 대시보드"
+        await update.message.reply_photo(photo=btc_bytes, caption=caption)
 
-# ── Parataxis Korea pipeline ───────────────────────────────────────────────────
+    if eth_bytes:
+        caption = "📊 Ethereum Dashboard" if lang == "en" else "📊 이더리움 대시보드"
+        await update.message.reply_photo(photo=eth_bytes, caption=caption)
 
-def _get_parataxis_news_sync(limit: int) -> list[dict]:
-    """
-    Run all Parataxis query variants, merge results, de-dup by normalised URL,
-    discard items older than PARATAXIS_MAX_AGE_DAYS, sort newest-first.
-    """
-    cutoff     = datetime.now(timezone.utc) - timedelta(days=PARATAXIS_MAX_AGE_DAYS)
-    seen_keys: set[str] = set()
-    merged:    list[dict] = []
+# ── /mining ────────────────────────────────────────────────────────────────────
 
-    for query in COMPANY_QUERIES["parataxis"]:
-        for item in _fetch_rss_sync(query, limit):
-            url = item.get("url", "")
-            if not url:
-                continue
-            key = _url_key(url)
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
+async def cmd_mining(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """On-demand mining stats fetch."""
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+    lang    = db.get_lang(chat_id)
 
-            dt: datetime | None = item["_dt"]
-            if dt is not None and dt < cutoff:
-                log.debug("Parataxis: dropping old item (%s) %s", item["time"], item["title"][:60])
-                continue
+    if not _is_admin(user.id) and not db.is_approved(chat_id):
+        await update.message.reply_text("🔒 Access restricted.")
+        return
 
-            merged.append(item)
+    db.log_event("mining", user.id, user.username, chat_id)
+    wait_msg = "⏳ 채굴 현황 불러오는 중…" if lang == "ko" else "⏳ Fetching mining stats…"
+    sent = await update.message.reply_text(wait_msg)
 
-    merged.sort(
-        key=lambda it: it["_dt"] if it["_dt"] is not None else datetime.min.replace(tzinfo=timezone.utc),
-        reverse=True,
-    )
-
-    result = [_strip_dt(it) for it in merged[:limit]]
-    log.info("Parataxis news: %d items after merge/filter/sort (limit=%d)", len(result), limit)
-    return result
-
-
-# ── GDELT fallback ─────────────────────────────────────────────────────────────
-
-def _fetch_gdelt_sync(company_key: str, limit: int) -> list[dict]:
-    queries = COMPANY_QUERIES.get(company_key, [company_key])
-    query   = urllib.parse.quote(queries[0])
-    url     = (
-        "https://api.gdeltproject.org/api/v2/doc/doc"
-        f"?query={query}&mode=artlist&maxrecords={limit}&format=json"
-    )
     try:
-        with httpx.Client(timeout=TIMEOUT) as client:
-            r = client.get(url)
-        r.raise_for_status()
-        return [
-            {
-                "title":     a.get("title", ""),
-                "publisher": a.get("domain", ""),
-                "time":      a.get("seendate", "")[:16].replace("T", " ") if a.get("seendate") else "",
-                "url":       a.get("url", ""),
-            }
-            for a in r.json().get("articles", [])[:limit]
+        stats = await get_mining_stats()
+    except LuxorError as exc:
+        log.error("cmd_mining error: %s", exc)
+        err_msg = (
+            "⚠️ 채굴 데이터를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요."
+            if lang == "ko" else
+            "⚠️ Could not fetch mining stats. Please try again shortly."
+        )
+        await sent.edit_text(err_msg)
+        return
+
+    await sent.edit_text(fmt_mining_stats(stats, lang), parse_mode=ParseMode.HTML)
+
+
+# ── /daily ─────────────────────────────────────────────────────────────────────
+
+def _fmt_daily_header(
+    lang: str,
+    date_str: str,
+    time_str: str,
+    btc: dict | None,
+    eth: dict | None,
+    stock_pk: dict | None,   # Parataxis Korea 288330
+    stock_pe: dict | None,   # Parataxis Ethereum 290560
+    stats,                   # MiningStats | None
+) -> str:
+    """Build the executive summary header for /daily."""
+
+    def fmt_coin(d):
+        if d and "error" not in d:
+            p = d["price"]
+            return f"${p:,.0f}" if d.get("currency","USD") != "KRW" else f"₩{p:,.0f}"
+        return "N/A"
+
+    def fmt_stock(d):
+        if d and "error" not in d:
+            p      = d["price"]
+            change = d.get("change", 0)
+            pct    = d.get("change_pct", "0")
+            arrow  = "▲" if change > 0 else ("▼" if change < 0 else "—")
+            return f"₩{p:,.0f}", f"{arrow} ₩{abs(change):,.0f} ({pct}%)"
+        return "N/A", ""
+
+    btc_str = fmt_coin(btc)
+    eth_str = fmt_coin(eth)
+    pk_str, pk_chg  = fmt_stock(stock_pk)
+    pe_str, pe_chg  = fmt_stock(stock_pe)
+
+    if stats:
+        hr_str      = f"{stats.hashrate_ph:.2f} PH/s"
+        workers_str = str(stats.active_workers)
+        today_str   = f"{stats.btc_today:.8f} BTC"
+        mtd_str     = f"{stats.btc_mtd:.8f} BTC"
+    else:
+        hr_str = workers_str = today_str = mtd_str = "N/A"
+
+    from datetime import date
+    month_start = date.today().replace(day=1).strftime("%b %-d")
+
+    if lang == "ko":
+        lines = [
+            f"<b>📊 파라택시스 데일리 스냅샷 — {date_str} ({time_str} KST)</b>",
+            "",
+            "<b>시장</b>",
+            f"• BTC: <b>{btc_str}</b>",
+            f"• ETH: <b>{eth_str}</b>",
+            f"• 파라택시스 코리아 (288330): <b>{pk_str}</b>" + (f"  {pk_chg}" if pk_chg else ""),
+            f"• 파라택시스 이더리움 (290560): <b>{pe_str}</b>" + (f"  {pe_chg}" if pe_chg else ""),
+            "",
+            "<b>채굴</b>",
+            f"• 플릿 해시레이트: <b>{hr_str}</b>",
+            f"• 활성 워커: <b>{workers_str}</b>",
+            f"• 오늘 채굴: <b>{today_str}</b>",
+            f"• 이번 달 채굴 ({month_start}~): <b>{mtd_str}</b>",
+            "",
+            "대시보드 및 상세 지표는 아래를 확인하세요 ↓",
         ]
+    else:
+        lines = [
+            f"<b>📊 Parataxis Daily Snapshot — {date_str} ({time_str} KST)</b>",
+            "",
+            "<b>Market</b>",
+            f"• BTC: <b>{btc_str}</b>",
+            f"• ETH: <b>{eth_str}</b>",
+            f"• Parataxis Korea (288330): <b>{pk_str}</b>" + (f"  {pk_chg}" if pk_chg else ""),
+            f"• Parataxis Ethereum (290560): <b>{pe_str}</b>" + (f"  {pe_chg}" if pe_chg else ""),
+            "",
+            "<b>Mining</b>",
+            f"• Fleet Hashrate: <b>{hr_str}</b>",
+            f"• Active Workers: <b>{workers_str}</b>",
+            f"• BTC Today: <b>{today_str}</b>",
+            f"• BTC MTD (since {month_start}): <b>{mtd_str}</b>",
+            "",
+            "Dashboard and detailed metrics below ↓",
+        ]
+    return "\n".join(lines)
+
+
+async def cmd_daily(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Combined daily snapshot: header + brief graphic + mining stats + stock price."""
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+    lang    = db.get_lang(chat_id)
+
+    if not _is_admin(user.id) and not db.is_approved(chat_id):
+        await update.message.reply_text("🔒 Access restricted.")
+        return
+
+    db.log_event("daily", user.id, user.username, chat_id)
+    wait_msg = "⏳ 데일리 스냅샷 준비 중…" if lang == "ko" else "⏳ Preparing daily snapshot…"
+    sent = await update.message.reply_text(wait_msg)
+
+    import asyncio as _asyncio
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZI
+    now      = _dt.now(_ZI("Asia/Seoul"))
+    date_str = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H:%M")
+
+    # Fetch all data sources in parallel
+    btc_result = eth_result = stock_pk_result = stock_pe_result = stats_result = None
+    try:
+        btc_result, eth_result, stock_pk_result, stock_pe_result, stats_result = await _asyncio.gather(
+            get_price_usd("btc"),
+            get_price_usd("eth"),
+            get_stock_price_krw(PARATAXIS_TICKER),          # 288330
+            get_stock_price_krw("290560"),                   # Parataxis Ethereum
+            get_mining_stats(),
+            return_exceptions=True
+        )
+        if isinstance(btc_result,      Exception): btc_result      = None
+        if isinstance(eth_result,      Exception): eth_result      = None
+        if isinstance(stock_pk_result, Exception): stock_pk_result = None
+        if isinstance(stock_pe_result, Exception): stock_pe_result = None
+        if isinstance(stats_result,    Exception): stats_result    = None
     except Exception as exc:
-        log.warning("GDELT fetch failed for %s: %s", company_key, exc)
-        return []
+        log.error("cmd_daily gather error: %s", exc)
+
+    # 1. Header summary
+    header = _fmt_daily_header(
+        lang, date_str, time_str,
+        btc_result, eth_result, stock_pk_result, stock_pe_result, stats_result
+    )
+    await sent.edit_text(header, parse_mode=ParseMode.HTML)
+
+    # 2. BTC screenshot
+    try:
+        btc_png = await take_screenshot_with_timeout(lang, "btc")
+        btc_cap = f"📊 Bitcoin Dashboard — {date_str}" if lang == "en" else f"📊 비트코인 대시보드 — {date_str}"
+        await update.message.reply_photo(photo=btc_png, caption=btc_cap)
+    except BriefError as exc:
+        log.error("cmd_daily BTC screenshot error: %s", exc)
+        err = "⚠️ BTC 스크린샷을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not capture BTC dashboard."
+        await update.message.reply_text(err)
+
+    # 3. ETH screenshot
+    try:
+        eth_png = await take_screenshot_with_timeout(lang, "eth")
+        eth_cap = f"📊 Ethereum Dashboard — {date_str}" if lang == "en" else f"📊 이더리움 대시보드 — {date_str}"
+        await update.message.reply_photo(photo=eth_png, caption=eth_cap)
+    except BriefError as exc:
+        log.error("cmd_daily ETH screenshot error: %s", exc)
+        err = "⚠️ ETH 스크린샷을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not capture ETH dashboard."
+        await update.message.reply_text(err)
 
 
-# ── Generic pipeline (bitmax / bitplanet / microstrategy) ─────────────────────
 
-def _get_news_sync(company_key: str, limit: int = 5) -> list[dict]:
-    queries   = COMPANY_QUERIES.get(company_key.lower(), [company_key])
-    results   = []
-    seen_urls: set[str] = set()
+# ── /kakao + /kakaoexport ──────────────────────────────────────────────────────
 
-    for q in queries:
-        for item in _fetch_rss_sync(q, limit):
-            url = item.get("url", "")
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                results.append(_strip_dt(item))
-        if len(results) >= limit:
-            break
+import sheets as _sheets
 
-    if len(results) < limit:
-        for item in _fetch_gdelt_sync(company_key, limit):
-            url = item.get("url", "")
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                results.append(item)
-
-    return results[:limit]
+_KAKAO_ALLOWED = {7205462694, 8168826794, 921350602}  # Tony, David, Jason
 
 
-# ── Public async entry point ──────────────────────────────────────────────────
+async def cmd_kakao(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Log a Kakao meeting note. Authorized users only."""
+    user = update.effective_user
+    if not user or user.id not in _KAKAO_ALLOWED:
+        await update.message.reply_text("Command not recognized.")
+        return
 
-async def get_news(company_key: str, limit: int = 5) -> list[dict]:
-    """Async entry point — runs blocking fetch in a thread pool."""
-    key = company_key.lower()
-    if key == "parataxis":
-        return await asyncio.to_thread(_get_parataxis_news_sync, limit)
-    return await asyncio.to_thread(_get_news_sync, key, limit)
+    # Preserve exact formatting — split raw text after the command token
+    raw   = (update.message.text or "")
+    parts = raw.split(None, 1)
+    msg   = parts[1] if len(parts) > 1 else ""
+    if not msg:
+        await update.message.reply_text("Usage: /kakao <message>")
+        return
+
+    display = user.username or user.full_name or str(user.id)
+    db.kakao_log_add(user.id, display, msg)
+
+    # Fire-and-forget to Google Sheets — failure never affects the bot
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    ts = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST")
+    ctx.application.create_task(_sheets.append_kakao_entry(ts, display, msg))
+
+    await update.message.reply_text("✅ Logged.")
+
+
+async def cmd_kakaoexport(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Export all kakao log entries. Available to all approved users."""
+    entries = db.kakao_log_get_recent(3)
+    if not entries:
+        await update.message.reply_text("No kakao log entries yet.")
+        return
+
+    lines = []
+    for e in entries:
+        who = e.get("username") or str(e.get("user_id", "unknown"))
+        # Format: 3/23/2026 5:18pm  JDragon812 wrote '...'
+        # logged_at is already "YYYY-MM-DD HH:MM KST"
+        ts_raw = e.get("logged_at", "")
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(ts_raw, "%Y-%m-%d %H:%M KST")
+            ts = dt.strftime("%-m/%-d/%Y %-I:%M%p").lower()
+            # Capitalise AM/PM
+            ts = ts[:-2] + ts[-2:].upper()
+        except Exception:
+            ts = ts_raw
+        text = e.get("message", "")
+        lines.append(f"{ts}  {who} wrote '{text}'")
+
+    output = "\n\n".join(lines)
+
+    sheet_link = (
+        "\n\n📋 Full log: https://docs.google.com/spreadsheets/d/1oQcNwpGjePKFvUaIyN44tKU04RtQpHBCZNMy1q2scbg"
+    )
+
+    # If too long, truncate with ellipsis and always append sheet link
+    LIMIT = 3800
+    if len(output) > LIMIT:
+        output = output[:LIMIT].rsplit("\n", 1)[0] + "\n\n..."
+    await update.message.reply_text(output + sheet_link)
+
+# ── /t (translation) ──────────────────────────────────────────────────────────
+
+from openai_translate import TranslateError, translate as _oa_translate, detect_lang as _oa_detect, SUPPORTED_LANGS as _T_LANGS
+
+_T_HELP = (
+    "<b>Translation command usage:</b>\n\n"
+    "/t &lt;message&gt; — auto-detects English↔Korean and translates to the opposite language\n"
+    "/t en &lt;message&gt; — translate to English (explicit override)\n"
+    "/t ko &lt;message&gt; — translate to Korean (explicit override)\n"
+    "/t help — show this message"
+)
+
+
+async def cmd_t(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Translation command."""
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+
+    if not _is_admin(user.id) and not db.is_approved(chat_id):
+        await update.message.reply_text("🔒 Access restricted.")
+        return
+
+    # Preserve full formatting — read raw text after /t
+    raw   = (update.message.text or "").strip()
+    # Strip @BotName suffix for group chats e.g. /t@ParataxisBot -> /t
+    first_token = raw.split(None, 1)[0].split("@")[0]
+    rest        = raw[len(raw.split(None, 1)[0]):].strip() if len(raw.split(None, 1)) > 1 else ""
+    body        = rest
+
+    log.info("[cmd_t] raw=%r body=%r has_reply=%s", raw, body, bool(update.message.reply_to_message))
+
+    # ── /t (reply-based) — /t with no body sent as a reply to another message ──
+    if not body and update.message.reply_to_message:
+        replied_msg  = update.message.reply_to_message
+        replied_text = (replied_msg.text or replied_msg.caption or "").strip()
+        if not replied_text:
+            await update.message.reply_text("The replied-to message has no text to translate.")
+            return
+        wait = await update.message.reply_text("⏳ Translating…")
+        try:
+            result = await _oa_translate(replied_text, None)
+            await wait.edit_text(result)
+        except TranslateError as exc:
+            log.error("cmd_t reply translate error: %s", exc)
+            await wait.edit_text("⚠️ Translation failed. Please try again shortly.")
+        return
+
+    # ── /t help ──
+    if not body or body.strip().lower() == "help":
+        await update.message.reply_text(_T_HELP, parse_mode=ParseMode.HTML)
+        return
+
+    # ── /t status ──
+    if body.strip().lower() == "status":
+        lang = db.get_t_lang(user.id)
+        if lang:
+            await update.message.reply_text(f"Your default translation language is: <b>{lang}</b>", parse_mode=ParseMode.HTML)
+        else:
+            await update.message.reply_text("You have no default translation language set. Use /t set en or /t set ko.")
+        return
+
+    # ── /t unset ──
+    if body.strip().lower() == "unset":
+        db.unset_t_lang(user.id)
+        await update.message.reply_text("✅ Default translation language removed.")
+        return
+
+    # ── /t set <lang> ──
+    set_parts = body.strip().lower().split(None, 1)
+    if set_parts[0] == "set":
+        if len(set_parts) < 2 or set_parts[1] not in _T_LANGS:
+            await update.message.reply_text(f"Supported languages: {', '.join(sorted(_T_LANGS))}\nExample: /t set ko")
+            return
+        db.set_t_lang(user.id, set_parts[1])
+        await update.message.reply_text(f"✅ Default translation language set to: <b>{set_parts[1]}</b>", parse_mode=ParseMode.HTML)
+        return
+
+    # ── /t <lang> <message> — explicit override ──
+    first_word = body.split(None, 1)[0].lower()
+    if first_word in _T_LANGS:
+        target_lang = first_word
+        msg_parts   = body.split(None, 1)
+        text        = msg_parts[1] if len(msg_parts) > 1 else ""
+        if not text:
+            await update.message.reply_text(f"Usage: /t {target_lang} <message>")
+            return
+    else:
+        # ── /t <message> — use saved default or auto-detect ──
+        text = body
+        saved = db.get_t_lang(user.id)
+        if saved:
+            target_lang = saved
+        else:
+            # Auto-detect handled inside translate call — pass None
+            target_lang = None
+
+    # Translate
+    wait = await update.message.reply_text("⏳ Translating…")
+    try:
+        result = await _oa_translate(text, target_lang)  # target_lang=None means auto-detect
+        await wait.edit_text(result)
+    except TranslateError as exc:
+        log.error("cmd_t translate error: %s", exc)
+        await wait.edit_text("⚠️ Translation failed. Please try again shortly.")
