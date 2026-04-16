@@ -161,20 +161,18 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• /daily — 데일리 스냅샷 (가격 + 주식 + 채굴)\n"
             "• /mining — 채굴 현황 보기\n"
             "• /t [텍스트] — 한국어↔영어 번역\n"
-            "• /kakao <메모> — 회의 메모 기록\n"
             "• /help — 이 도움말"
         )
     else:
         text = (
             "<b>📖 Help</b>\n\n"
-            "• /start — Welcome screen & language selection\n"
+            "• /start — Welcome screen &amp; language selection\n"
             "• /subscribe — Manage subscriptions (checkbox menu)\n"
             "• /status — Check your current subscriptions\n"
             "• /brief — BTC + ETH dashboard screenshots\n"
             "• /daily — Daily snapshot (prices + stocks + mining)\n"
             "• /mining — Get mining stats right now\n"
             "• /t [text] — Translate Korean↔English\n"
-            "• /kakao <note> — Log a meeting note\n"
             "• /help — This message"
         )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
