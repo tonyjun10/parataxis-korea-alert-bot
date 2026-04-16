@@ -248,8 +248,10 @@ def kb_subscribe_persistent(lang: str, subs: set) -> InlineKeyboardMarkup:
 
     if lang == "ko":
         rows = [
-            [InlineKeyboardButton(f"{chk('coin_prices')} 코인 가격 + 데일리 브리프",     callback_data="sub2:coin_prices")],
-            [InlineKeyboardButton(f"{chk('stock_prices')} 주식 가격 + 데일리 스냅샷",    callback_data="sub2:stock_prices")],
+            [InlineKeyboardButton(f"{chk('coin_prices')} 코인 가격 업데이트",            callback_data="sub2:coin_prices")],
+            [InlineKeyboardButton(f"{chk('daily_brief')} 데일리 브리프 (10:00)",          callback_data="sub2:daily_brief")],
+            [InlineKeyboardButton(f"{chk('stock_prices')} 주식 가격 업데이트",            callback_data="sub2:stock_prices")],
+            [InlineKeyboardButton(f"{chk('daily_snapshot')} 데일리 스냅샷 (9:00)",       callback_data="sub2:daily_snapshot")],
             [InlineKeyboardButton(f"{chk('mining')} 채굴 현황",                           callback_data="sub2:mining")],
             [InlineKeyboardButton(f"{chk('parataxis_news')} 파라택시스 뉴스 피드",        callback_data="sub2:parataxis_news")],
             [InlineKeyboardButton(f"{chk('competitor_news')} 경쟁사 뉴스 피드",           callback_data="sub2:competitor_news")],
@@ -257,8 +259,10 @@ def kb_subscribe_persistent(lang: str, subs: set) -> InlineKeyboardMarkup:
         ]
     else:
         rows = [
-            [InlineKeyboardButton(f"{chk('coin_prices')} Coin Prices + Daily Brief",     callback_data="sub2:coin_prices")],
-            [InlineKeyboardButton(f"{chk('stock_prices')} Stock Prices + Daily Snapshot", callback_data="sub2:stock_prices")],
+            [InlineKeyboardButton(f"{chk('coin_prices')} Coin Price Updates",            callback_data="sub2:coin_prices")],
+            [InlineKeyboardButton(f"{chk('daily_brief')} Daily Brief (10:00 KST)",        callback_data="sub2:daily_brief")],
+            [InlineKeyboardButton(f"{chk('stock_prices')} Stock Price Updates",           callback_data="sub2:stock_prices")],
+            [InlineKeyboardButton(f"{chk('daily_snapshot')} Daily Snapshot (9:00 KST)",  callback_data="sub2:daily_snapshot")],
             [InlineKeyboardButton(f"{chk('mining')} Mining Updates",                      callback_data="sub2:mining")],
             [InlineKeyboardButton(f"{chk('parataxis_news')} Parataxis News Feeds",        callback_data="sub2:parataxis_news")],
             [InlineKeyboardButton(f"{chk('competitor_news')} Competitor News Feeds",      callback_data="sub2:competitor_news")],
