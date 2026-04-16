@@ -135,12 +135,12 @@ async def _show_language_prompt(update: Update):
         "🤖 <b>What you can do with this bot:</b>\n"
         "• 📊 Subscribe to Daily Updates — BTC/ETH prices, stock prices, news feeds\n"
         "• 🌐 Translate — /t + text for automatic Korean↔English translation\n"
-        "• 📝 Log Notes — /kakao to log meeting notes\n\n"
+        "• 📋 Kakao Summary — /kakaoexport for a summary of the Kakao shareholder groupchat\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🤖 <b>이 봇으로 할 수 있는 것:</b>\n"
         "• 📊 데일리 업데이트 구독 — BTC/ETH 가격, 주식, 뉴스\n"
         "• 🌐 번역 — /t + 텍스트로 자동 한국어↔영어 번역\n"
-        "• 📝 메모 기록 — /kakao 로 회의 메모 로그\n\n"
+        "• 📋 카카오 요약 — /kakaoexport 로 주주 단체 카카오톡 요약 확인\n\n"
         "Select your preferred language / 언어를 선택해 주세요:",
         reply_markup=kb_language(),
         parse_mode=ParseMode.HTML,
