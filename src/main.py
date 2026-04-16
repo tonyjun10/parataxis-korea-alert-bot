@@ -45,6 +45,7 @@ from handlers import (
     cmd_kakaoexport,
     cmd_audit,
     cmd_brief,
+    cmd_subscribe,
     cmd_daily,
     cmd_mining,
     cmd_help,
@@ -86,6 +87,7 @@ def main():
     # ── Command handlers ───────────────────────────────────────────────────────
     app.add_handler(CommandHandler("start",   cmd_start))
     app.add_handler(CommandHandler("help",    cmd_help))
+    app.add_handler(CommandHandler("subscribe", cmd_subscribe))
     app.add_handler(CommandHandler("watch",   cmd_watch))
     app.add_handler(CommandHandler("unwatch", cmd_unwatch))
     app.add_handler(CommandHandler("status",  cmd_status))
