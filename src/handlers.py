@@ -19,7 +19,7 @@ from formatter import fmt_disclosures, fmt_news
 from keyboards import (
     kb_after_price, kb_after_result, kb_approval,
     kb_category, kb_language, kb_main, kb_price, kb_subscribe,
-    kb_unwatch_categories, kb_watch_categories,
+    kb_subscribe_persistent, kb_unwatch_categories, kb_watch_categories,
 )
 from news import get_news
 from prices import fmt_price, fmt_stock_price, get_price, get_price_usd, get_stock_price_krw, PARATAXIS_TICKER
@@ -129,8 +129,11 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def _show_language_prompt(update: Update):
+    """Show the new unified welcome + language selection screen."""
     await update.message.reply_text(
-        "🌏 <b>Parataxis Korea Alert Bot</b>\n\nPlease select your language:",
+        "👋 <b>Welcome to the Parataxis Family Bot</b>\n\n"
+        "Please select your preferred language:\n"
+        "언어를 선택해 주세요:",
         reply_markup=kb_language(),
         parse_mode=ParseMode.HTML,
     )
@@ -143,39 +146,84 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if lang == "ko":
         text = (
             "<b>📖 도움말</b>\n\n"
-            "• /start — 언어 선택\n"
-            "• /watch — 알림 구독 (인수 없으면 메뉴)\n"
-            "• /watch news — 뉴스 알림 구독\n"
-            "• /watch disclosures — 공시 알림 구독\n"
-            "• /unwatch — 구독 취소\n"
+            "• /start — 시작 및 언어 선택\n"
+            "• /subscribe — 구독 관리 (체크박스 메뉴)\n"
             "• /status — 구독 상태 확인\n"
-            "• /watch brief — 데일리 브리프 구독\n"
-            "• /brief — 지금 브리프 보기\n"
-            "• /watch mining — 채굴 현황 알림 구독\n"
+            "• /brief — BTC + ETH 대시보드 스크린샷\n"
+            "• /daily — 데일리 스냅샷 (가격 + 주식 + 채굴)\n"
             "• /mining — 채굴 현황 보기\n"
-            "• /watch daily — 데일리 스냅샷 구독\n"
-            "• /daily — 데일리 스냅샷 보기\n"
+            "• /t <텍스트> — 한국어↔영어 번역\n"
+            "• /kakao <메모> — 회의 메모 기록\n"
             "• /help — 이 도움말"
         )
     else:
         text = (
             "<b>📖 Help</b>\n\n"
-            "• /start — Language selection\n"
-            "• /watch — Subscribe to alerts (menu if no argument)\n"
-            "• /watch news — Subscribe to news alerts\n"
-            "• /watch disclosures — Subscribe to disclosure alerts\n"
-            "• /unwatch — Unsubscribe\n"
-            "• /status — Check subscription status\n"
-            "• /watch brief — Subscribe to daily market brief\n"
-            "• /brief — Get the brief right now\n"
-            "• /watch mining — Subscribe to mining updates\n"
+            "• /start — Welcome screen & language selection\n"
+            "• /subscribe — Manage subscriptions (checkbox menu)\n"
+            "• /status — Check your current subscriptions\n"
+            "• /brief — BTC + ETH dashboard screenshots\n"
+            "• /daily — Daily snapshot (prices + stocks + mining)\n"
             "• /mining — Get mining stats right now\n"
-            "• /watch daily — Subscribe to daily snapshot\n"
-            "• /daily — Get daily snapshot right now\n"
+            "• /t <text> — Translate Korean↔English\n"
+            "• /kakao <note> — Log a meeting note\n"
             "• /help — This message"
         )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
+
+
+# ── Subscription key mapping ──────────────────────────────────────────────────
+
+_SUB2_MAP = {
+    # sub2 key -> list of (company, category) pairs to subscribe/unsubscribe
+    "coin_prices":    [("brief", "brief")],          # reuses brief slot for price alerts
+    "stock_prices":   [("daily", "daily")],           # reuses daily slot for stock alerts
+    "daily_brief":    [("brief", "brief")],
+    "mining":         [("mining", "mining")],
+    "daily_snapshot": [("daily", "daily")],
+}
+
+def _get_sub2_state(chat_id: int) -> set:
+    """Return set of active sub2 keys for a chat."""
+    subs = db.get_subscriptions(chat_id)
+    active = set()
+    company_cats = {(s["company"], s["category"]) for s in subs}
+    if ("brief", "brief") in company_cats:
+        active.add("coin_prices")
+        active.add("daily_brief")
+    if ("mining", "mining") in company_cats:
+        active.add("mining")
+    if ("daily", "daily") in company_cats:
+        active.add("stock_prices")
+        active.add("daily_snapshot")
+    return active
+
+
+
+# ── /subscribe ────────────────────────────────────────────────────────────────
+
+async def cmd_subscribe(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Show persistent checkbox-style subscription menu."""
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+    lang    = db.get_lang(chat_id)
+
+    if not _is_admin(user.id) and not db.is_approved(chat_id):
+        await update.message.reply_text("🔒 Access restricted.")
+        return
+
+    state = _get_sub2_state(chat_id)
+    prompt = (
+        "🔔 <b>구독 관리</b>\n\n구독 항목을 선택하거나 해제하세요:"
+        if lang == "ko" else
+        "🔔 <b>Subscription Manager</b>\n\nTap to toggle subscriptions on or off:"
+    )
+    await update.message.reply_text(
+        prompt,
+        reply_markup=kb_subscribe_persistent(lang, state),
+        parse_mode=ParseMode.HTML,
+    )
 
 # ── /watch ────────────────────────────────────────────────────────────────────
 
@@ -496,9 +544,26 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         selected_lang = data.split(":")[1]
         db.set_lang(chat_id, selected_lang)
         db.log_event("click", user.id, user.username, chat_id, data)
-        label = "English" if selected_lang == "en" else "한국어"
+        if selected_lang == "ko":
+            welcome_text = (
+                "✅ 언어가 <b>한국어</b>로 설정되었습니다.\n\n"
+                "🤖 <b>파라택시스 패밀리 봇으로 할 수 있는 것:</b>\n\n"
+                "• 📊 <b>데일리 업데이트 구독</b> — BTC/ETH 가격, 주식 가격, 뉴스 피드\n"
+                "• 🌐 <b>번역</b> — /t + 텍스트로 자동 한국어↔영어 번역\n"
+                "• 📝 <b>메모 기록</b> — /kakao 로 회의 메모 로그\n\n"
+                "아래 메뉴에서 선택하세요:"
+            )
+        else:
+            welcome_text = (
+                "✅ Language set to <b>English</b>.\n\n"
+                "🤖 <b>What you can do with this bot:</b>\n\n"
+                "• 📊 <b>Subscribe to Daily Updates</b> — BTC/ETH prices, stock prices, news feeds\n"
+                "• 🌐 <b>Translate</b> — /t + text to auto-translate Korean↔English\n"
+                "• 📝 <b>Log Notes</b> — /kakao to log meeting notes\n\n"
+                "Select from the menu below:"
+            )
         await query.edit_message_text(
-            f"🌐 Language set to <b>{label}</b>.\n\n{_main_prompt(selected_lang)}",
+            welcome_text,
             reply_markup=kb_main(selected_lang),
             parse_mode=ParseMode.HTML,
         )
@@ -618,10 +683,65 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         nav = kb_after_result(lang, "parataxis")
         await query.edit_message_text(_T_HELP, reply_markup=nav, parse_mode=ParseMode.HTML)
 
-    elif data == "menu:subscribe":
-        prompt = "구독할 항목을 선택하세요:" if lang == "ko" else "Choose what to subscribe to:"
+    # ── sub2: persistent toggle subscriptions ──────────────────────────────────
+    elif data.startswith("sub2:"):
+        key = data.split(":")[1]
+        db.log_event("click", user.id, user.username, chat_id, data)
+        state = _get_sub2_state(chat_id)
+        is_first = not db.has_any_subscription(chat_id)
+
+        if key == "coin_prices":
+            if "coin_prices" in state:
+                db.unsubscribe(chat_id, company="brief", category="brief")
+            else:
+                db.subscribe(chat_id, "brief", "brief")
+                if is_first:
+                    ctx.application.create_task(_seed_dedup_tables())
+        elif key == "stock_prices":
+            if "stock_prices" in state:
+                db.unsubscribe(chat_id, company="daily", category="daily")
+            else:
+                db.subscribe(chat_id, "daily", "daily")
+        elif key == "daily_brief":
+            if "daily_brief" in state:
+                db.unsubscribe(chat_id, company="brief", category="brief")
+            else:
+                db.subscribe(chat_id, "brief", "brief")
+                if is_first:
+                    ctx.application.create_task(_seed_dedup_tables())
+        elif key == "mining":
+            if "mining" in state:
+                db.unsubscribe(chat_id, company="mining", category="mining")
+            else:
+                db.subscribe(chat_id, "mining", "mining")
+        elif key == "daily_snapshot":
+            if "daily_snapshot" in state:
+                db.unsubscribe(chat_id, company="daily", category="daily")
+            else:
+                db.subscribe(chat_id, "daily", "daily")
+
+        # Refresh the menu with updated state
+        new_state = _get_sub2_state(chat_id)
+        prompt = (
+            "🔔 <b>구독 관리</b>\n\n구독 항목을 선택하거나 해제하세요:"
+            if lang == "ko" else
+            "🔔 <b>Subscription Manager</b>\n\nTap to toggle subscriptions on or off:"
+        )
         await query.edit_message_text(
-            prompt, reply_markup=kb_subscribe(lang), parse_mode=ParseMode.HTML,
+            prompt,
+            reply_markup=kb_subscribe_persistent(lang, new_state),
+            parse_mode=ParseMode.HTML,
+        )
+
+    elif data == "menu:subscribe":
+        state = _get_sub2_state(chat_id)
+        prompt = (
+            "🔔 <b>구독 관리</b>\n\n구독 항목을 선택하거나 해제하세요:"
+            if lang == "ko" else
+            "🔔 <b>Subscription Manager</b>\n\nTap to toggle subscriptions on or off:"
+        )
+        await query.edit_message_text(
+            prompt, reply_markup=kb_subscribe_persistent(lang, state), parse_mode=ParseMode.HTML,
         )
 
     # ── Subscribe via menu buttons ──────────────────────────────────────
@@ -800,9 +920,10 @@ def _detect_category(text: str, company: str = "") -> str:
 
 async def cmd_brief(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
-    On-demand dashboard screenshot. Sends the correct language dashboard.
+    On-demand dashboard screenshot — sends both BTC and ETH tracker screenshots.
     Works regardless of subscription status.
     """
+    import asyncio as _asyncio
     user    = update.effective_user
     chat_id = update.effective_chat.id
     lang    = db.get_lang(chat_id)
@@ -812,31 +933,39 @@ async def cmd_brief(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     db.log_event("brief", user.id, user.username, chat_id)
-    wait_msg = "⏳ 대시보드 스크린샷 캡처 중…" if lang == "ko" else "⏳ Capturing dashboard screenshot…"
+    wait_msg = "⏳ 대시보드 스크린샷 캡처 중…" if lang == "ko" else "⏳ Capturing dashboard screenshots…"
     sent = await update.message.reply_text(wait_msg)
 
+    # Fetch BTC and ETH screenshots sequentially (Playwright can't run two at once)
+    btc_bytes = eth_bytes = None
     try:
-        png_bytes = await take_screenshot_with_timeout(lang)
+        btc_bytes = await take_screenshot_with_timeout(lang, "btc")
     except BriefError as exc:
-        log.error("cmd_brief screenshot error: %s", exc)
+        log.error("cmd_brief BTC screenshot error: %s", exc)
+
+    try:
+        eth_bytes = await take_screenshot_with_timeout(lang, "eth")
+    except BriefError as exc:
+        log.error("cmd_brief ETH screenshot error: %s", exc)
+
+    await sent.delete()
+
+    if not btc_bytes and not eth_bytes:
         err_msg = (
             "⚠️ 스크린샷을 가져오지 못했습니다. 잠시 후 다시 시도해 주세요."
             if lang == "ko" else
-            "⚠️ Could not capture the dashboard screenshot. Please try again shortly."
+            "⚠️ Could not capture dashboard screenshots. Please try again shortly."
         )
-        await sent.edit_text(err_msg)
+        await update.message.reply_text(err_msg)
         return
 
-    await sent.delete()
-    caption = (
-        "📊 데일리 마켓 대시보드"
-        if lang == "ko" else
-        "📊 Market Dashboard"
-    )
-    await update.message.reply_photo(
-        photo=png_bytes,
-        caption=caption,
-    )
+    if btc_bytes:
+        caption = "📊 Bitcoin Dashboard" if lang == "en" else "📊 비트코인 대시보드"
+        await update.message.reply_photo(photo=btc_bytes, caption=caption)
+
+    if eth_bytes:
+        caption = "📊 Ethereum Dashboard" if lang == "en" else "📊 이더리움 대시보드"
+        await update.message.reply_photo(photo=eth_bytes, caption=caption)
 
 # ── /mining ────────────────────────────────────────────────────────────────────
 
@@ -876,34 +1005,33 @@ def _fmt_daily_header(
     date_str: str,
     time_str: str,
     btc: dict | None,
-    stock: dict | None,
-    stats,           # MiningStats | None
+    eth: dict | None,
+    stock_pk: dict | None,   # Parataxis Korea 288330
+    stock_pe: dict | None,   # Parataxis Ethereum 290560
+    stats,                   # MiningStats | None
 ) -> str:
     """Build the executive summary header for /daily."""
 
-    # BTC price
-    if btc and "error" not in btc:
-        btc_price = btc["price"]
-        if btc.get("currency", "USD") == "KRW":
-            btc_str = f"₩{btc_price:,.0f}"
-        else:
-            btc_str = f"${btc_price:,.0f}"
-    else:
-        btc_str = "N/A"
+    def fmt_coin(d):
+        if d and "error" not in d:
+            p = d["price"]
+            return f"${p:,.0f}" if d.get("currency","USD") != "KRW" else f"₩{p:,.0f}"
+        return "N/A"
 
-    # Stock price
-    if stock and "error" not in stock:
-        s_price  = stock["price"]
-        s_change = stock.get("change", 0)
-        s_pct    = stock.get("change_pct", "0")
-        arrow    = "▲" if s_change > 0 else ("▼" if s_change < 0 else "—")
-        stock_str  = f"₩{s_price:,.0f}"
-        change_str = f"{arrow} ₩{abs(s_change):,.0f} ({s_pct}%)"
-    else:
-        stock_str  = "N/A"
-        change_str = ""
+    def fmt_stock(d):
+        if d and "error" not in d:
+            p      = d["price"]
+            change = d.get("change", 0)
+            pct    = d.get("change_pct", "0")
+            arrow  = "▲" if change > 0 else ("▼" if change < 0 else "—")
+            return f"₩{p:,.0f}", f"{arrow} ₩{abs(change):,.0f} ({pct}%)"
+        return "N/A", ""
 
-    # Mining stats
+    btc_str = fmt_coin(btc)
+    eth_str = fmt_coin(eth)
+    pk_str, pk_chg  = fmt_stock(stock_pk)
+    pe_str, pe_chg  = fmt_stock(stock_pe)
+
     if stats:
         hr_str      = f"{stats.hashrate_ph:.2f} PH/s"
         workers_str = str(stats.active_workers)
@@ -921,7 +1049,9 @@ def _fmt_daily_header(
             "",
             "<b>시장</b>",
             f"• BTC: <b>{btc_str}</b>",
-            f"• 파라택시스 코리아: <b>{stock_str}</b>" + (f"  {change_str}" if change_str else ""),
+            f"• ETH: <b>{eth_str}</b>",
+            f"• 파라택시스 코리아 (288330): <b>{pk_str}</b>" + (f"  {pk_chg}" if pk_chg else ""),
+            f"• 파라택시스 이더리움 (290560): <b>{pe_str}</b>" + (f"  {pe_chg}" if pe_chg else ""),
             "",
             "<b>채굴</b>",
             f"• 플릿 해시레이트: <b>{hr_str}</b>",
@@ -937,7 +1067,9 @@ def _fmt_daily_header(
             "",
             "<b>Market</b>",
             f"• BTC: <b>{btc_str}</b>",
-            f"• Parataxis Korea: <b>{stock_str}</b>" + (f"  {change_str}" if change_str else ""),
+            f"• ETH: <b>{eth_str}</b>",
+            f"• Parataxis Korea (288330): <b>{pk_str}</b>" + (f"  {pk_chg}" if pk_chg else ""),
+            f"• Parataxis Ethereum (290560): <b>{pe_str}</b>" + (f"  {pe_chg}" if pe_chg else ""),
             "",
             "<b>Mining</b>",
             f"• Fleet Hashrate: <b>{hr_str}</b>",
@@ -964,7 +1096,6 @@ async def cmd_daily(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     wait_msg = "⏳ 데일리 스냅샷 준비 중…" if lang == "ko" else "⏳ Preparing daily snapshot…"
     sent = await update.message.reply_text(wait_msg)
 
-    # Fetch all data sources in parallel
     import asyncio as _asyncio
     from datetime import datetime as _dt
     from zoneinfo import ZoneInfo as _ZI
@@ -972,37 +1103,50 @@ async def cmd_daily(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     date_str = now.strftime("%Y-%m-%d")
     time_str = now.strftime("%H:%M")
 
-    btc_task   = get_price_usd("btc")
-    stock_task = get_stock_price_krw(PARATAXIS_TICKER)
-    mining_task = get_mining_stats()
-
-    btc_result = stock_result = stats_result = None
+    # Fetch all data sources in parallel
+    btc_result = eth_result = stock_pk_result = stock_pe_result = stats_result = None
     try:
-        btc_result, stock_result, stats_result = await _asyncio.gather(
-            btc_task, stock_task, mining_task, return_exceptions=True
+        btc_result, eth_result, stock_pk_result, stock_pe_result, stats_result = await _asyncio.gather(
+            get_price_usd("btc"),
+            get_price_usd("eth"),
+            get_stock_price_krw(PARATAXIS_TICKER),          # 288330
+            get_stock_price_krw("290560"),                   # Parataxis Ethereum
+            get_mining_stats(),
+            return_exceptions=True
         )
-        if isinstance(btc_result,   Exception): btc_result   = None
-        if isinstance(stock_result, Exception): stock_result = None
-        if isinstance(stats_result, Exception): stats_result = None
+        if isinstance(btc_result,      Exception): btc_result      = None
+        if isinstance(eth_result,      Exception): eth_result      = None
+        if isinstance(stock_pk_result, Exception): stock_pk_result = None
+        if isinstance(stock_pe_result, Exception): stock_pe_result = None
+        if isinstance(stats_result,    Exception): stats_result    = None
     except Exception as exc:
         log.error("cmd_daily gather error: %s", exc)
 
     # 1. Header summary
-    header = _fmt_daily_header(lang, date_str, time_str, btc_result, stock_result, stats_result)
+    header = _fmt_daily_header(
+        lang, date_str, time_str,
+        btc_result, eth_result, stock_pk_result, stock_pe_result, stats_result
+    )
     await sent.edit_text(header, parse_mode=ParseMode.HTML)
 
-    # 2. Brief screenshot
+    # 2. BTC screenshot
     try:
-        png_bytes = await take_screenshot_with_timeout(lang)
-        caption = (
-            f"📊 데일리 마켓 대시보드 — {date_str}"
-            if lang == "ko" else
-            f"📊 Daily Market Dashboard — {date_str}"
-        )
-        await update.message.reply_photo(photo=png_bytes, caption=caption)
+        btc_png = await take_screenshot_with_timeout(lang, "btc")
+        btc_cap = f"📊 Bitcoin Dashboard — {date_str}" if lang == "en" else f"📊 비트코인 대시보드 — {date_str}"
+        await update.message.reply_photo(photo=btc_png, caption=btc_cap)
     except BriefError as exc:
-        log.error("cmd_daily brief error: %s", exc)
-        err = "⚠️ 스크린샷을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not capture dashboard screenshot."
+        log.error("cmd_daily BTC screenshot error: %s", exc)
+        err = "⚠️ BTC 스크린샷을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not capture BTC dashboard."
+        await update.message.reply_text(err)
+
+    # 3. ETH screenshot
+    try:
+        eth_png = await take_screenshot_with_timeout(lang, "eth")
+        eth_cap = f"📊 Ethereum Dashboard — {date_str}" if lang == "en" else f"📊 이더리움 대시보드 — {date_str}"
+        await update.message.reply_photo(photo=eth_png, caption=eth_cap)
+    except BriefError as exc:
+        log.error("cmd_daily ETH screenshot error: %s", exc)
+        err = "⚠️ ETH 스크린샷을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not capture ETH dashboard."
         await update.message.reply_text(err)
 
 
