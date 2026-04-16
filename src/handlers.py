@@ -704,20 +704,16 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if key == "coin_prices":
             if "coin_prices" in state:
-                # Turning off coin prices also turns off daily brief
                 db.unsubscribe(chat_id, company="brief", category="brief")
             else:
-                # Turning on coin prices also turns on daily brief
                 db.subscribe(chat_id, "brief", "brief")
                 if is_first:
                     ctx.application.create_task(_seed_dedup_tables())
 
         elif key == "stock_prices":
             if "stock_prices" in state:
-                # Turning off stock prices also turns off daily snapshot
                 db.unsubscribe(chat_id, company="daily", category="daily")
             else:
-                # Turning on stock prices also turns on daily snapshot
                 db.subscribe(chat_id, "daily", "daily")
 
         elif key == "daily_brief":
