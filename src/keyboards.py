@@ -106,15 +106,17 @@ def kb_price(lang: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("₿ 비트코인 (BTC)",           callback_data="price:btc")],
             [InlineKeyboardButton("Ξ 이더리움 (ETH)",           callback_data="price:eth")],
             [InlineKeyboardButton("✕ 리플 (XRP)",               callback_data="price:xrp")],
-            [InlineKeyboardButton("📈 파라택시스 코리아 (288330)", callback_data="price:stock:288330")],
+            [InlineKeyboardButton("📈 파라택시스 코리아 (288330)",   callback_data="price:stock:288330")],
+            [InlineKeyboardButton("📈 파라택시스 이더리움 (290560)",     callback_data="price:stock:290560")],
             nav,
         ]
     else:
         rows = [
-            [InlineKeyboardButton("₿ Bitcoin (BTC)",                  callback_data="price:btc")],
-            [InlineKeyboardButton("Ξ Ethereum (ETH)",                 callback_data="price:eth")],
-            [InlineKeyboardButton("✕ XRP",                            callback_data="price:xrp")],
-            [InlineKeyboardButton("📈 Parataxis Korea (KOSDAQ 288330)", callback_data="price:stock:288330")],
+            [InlineKeyboardButton("₿ Bitcoin (BTC)",                       callback_data="price:btc")],
+            [InlineKeyboardButton("Ξ Ethereum (ETH)",                      callback_data="price:eth")],
+            [InlineKeyboardButton("✕ XRP",                                 callback_data="price:xrp")],
+            [InlineKeyboardButton("📈 Parataxis Korea (KOSDAQ 288330)",    callback_data="price:stock:288330")],
+            [InlineKeyboardButton("📈 Parataxis Ethereum (KOSDAQ 290560)", callback_data="price:stock:290560")],
             nav,
         ]
     return InlineKeyboardMarkup(rows)
@@ -228,3 +230,38 @@ def kb_approval(chat_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton("✅ Approve", callback_data=f"approve:{chat_id}"),
         InlineKeyboardButton("❌ Deny",    callback_data=f"deny:{chat_id}"),
     ]])
+
+
+# ── Persistent subscribe menu (checkbox-style) ────────────────────────────────
+
+def kb_subscribe_persistent(lang: str, subs: set) -> InlineKeyboardMarkup:
+    """
+    Checkbox-style subscribe menu. subs is a set of active subscription keys.
+    Keys: coin_prices, stock_prices, daily_brief, mining, daily_snapshot
+    """
+    def chk(key): return "✅" if key in subs else "☐"
+
+    nav = [
+        InlineKeyboardButton("⬅️ 뒤로" if lang == "ko" else "⬅️ Back", callback_data="nav:main"),
+        InlineKeyboardButton("🏠 Home", callback_data="nav:home"),
+    ]
+
+    if lang == "ko":
+        rows = [
+            [InlineKeyboardButton(f"{chk('coin_prices')} 코인 가격 업데이트",    callback_data="sub2:coin_prices")],
+            [InlineKeyboardButton(f"{chk('stock_prices')} 주식 가격 업데이트",   callback_data="sub2:stock_prices")],
+            [InlineKeyboardButton(f"{chk('daily_brief')} 데일리 브리프 (10:00)", callback_data="sub2:daily_brief")],
+            [InlineKeyboardButton(f"{chk('mining')} 채굴 현황",                  callback_data="sub2:mining")],
+            [InlineKeyboardButton(f"{chk('daily_snapshot')} 데일리 스냅샷 (9:00)", callback_data="sub2:daily_snapshot")],
+            nav,
+        ]
+    else:
+        rows = [
+            [InlineKeyboardButton(f"{chk('coin_prices')} Coin Price Updates",   callback_data="sub2:coin_prices")],
+            [InlineKeyboardButton(f"{chk('stock_prices')} Stock Price Updates", callback_data="sub2:stock_prices")],
+            [InlineKeyboardButton(f"{chk('daily_brief')} Daily Brief (10:00 KST)", callback_data="sub2:daily_brief")],
+            [InlineKeyboardButton(f"{chk('mining')} Mining Updates",            callback_data="sub2:mining")],
+            [InlineKeyboardButton(f"{chk('daily_snapshot')} Daily Snapshot (9:00 KST)", callback_data="sub2:daily_snapshot")],
+            nav,
+        ]
+    return InlineKeyboardMarkup(rows)
