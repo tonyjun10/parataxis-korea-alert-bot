@@ -97,10 +97,15 @@ async def _monitor_job(context) -> None:
 
     total_alerted = 0
     try:
-        for company in _DART_COMPANIES:
-            total_alerted += await _check_disclosures(bot, company)
-        for company in _NEWS_COMPANIES:
-            total_alerted += await _check_news(bot, company)
+        # Run all disclosure + news checks in parallel across companies
+        disc_tasks = [_check_disclosures(bot, company) for company in _DART_COMPANIES]
+        news_tasks = [_check_news(bot, company)        for company in _NEWS_COMPANIES]
+        results = await asyncio.gather(*disc_tasks, *news_tasks, return_exceptions=True)
+        for r in results:
+            if isinstance(r, Exception):
+                log.error("Monitor task error: %s", r)
+            else:
+                total_alerted += r
     except Exception:
         log.exception("Unhandled exception in monitor job")
 
@@ -242,16 +247,13 @@ async def _check_news(bot: Bot, company: str) -> int:
     publisher      = best.get("publisher", "")
     time_str       = best.get("time", "")
 
-    translated: dict[str, str | None] = {}
-    summaries:  dict[str, str | None] = {}
-
-    for lang_code in ("en", "ko"):
-        translated[lang_code] = await asyncio.to_thread(
-            translate_title, original_title, lang_code
-        )
-        summaries[lang_code] = await asyncio.to_thread(
-            summarize_article, url, lang_code
-        )
+    # Translate for both languages in parallel (summaries disabled)
+    en_title, ko_title = await asyncio.gather(
+        asyncio.to_thread(translate_title, original_title, "en"),
+        asyncio.to_thread(translate_title, original_title, "ko"),
+    )
+    translated = {"en": en_title, "ko": ko_title}
+    summaries  = {"en": None, "ko": None}
 
     alerted = 0
     for chat in chats:
