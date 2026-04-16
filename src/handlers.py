@@ -564,7 +564,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "🤖 <b>파라택시스 패밀리 봇으로 할 수 있는 것:</b>\n\n"
                 "• 📊 <b>데일리 업데이트 구독</b> — BTC/ETH 가격, 주식 가격, 뉴스 피드\n"
                 "• 🌐 <b>번역</b> — /t + 텍스트로 자동 한국어↔영어 번역\n"
-                "• 📝 <b>메모 기록</b> — /kakao 로 회의 메모 로그\n\n"
+                "• 📋 <b>카카오 요약</b> — /kakaoexport 로 주주 단체 카카오톡 요약 확인\n\n"
                 "아래 메뉴에서 선택하세요:"
             )
         else:
@@ -573,7 +573,7 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "🤖 <b>What you can do with this bot:</b>\n\n"
                 "• 📊 <b>Subscribe to Daily Updates</b> — BTC/ETH prices, stock prices, news feeds\n"
                 "• 🌐 <b>Translate</b> — /t + text to auto-translate Korean↔English\n"
-                "• 📝 <b>Log Notes</b> — /kakao to log meeting notes\n\n"
+                "• 📋 <b>Kakao Summary</b> — /kakaoexport for a summary of the Kakao shareholder groupchat\n\n"
                 "Select from the menu below:"
             )
         await query.edit_message_text(
