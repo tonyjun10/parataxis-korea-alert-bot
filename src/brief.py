@@ -14,8 +14,10 @@ from playwright.async_api import async_playwright, TimeoutError as PWTimeout
 
 log = logging.getLogger(__name__)
 
-DASHBOARD_EN         = "https://btc-tracker.up.railway.app/global-tracker"
-DASHBOARD_KO         = "https://btc-tracker.up.railway.app/korea-tracker"
+DASHBOARD_BTC_EN     = "https://btc-tracker.up.railway.app/global-tracker"
+DASHBOARD_BTC_KO     = "https://btc-tracker.up.railway.app/korea-tracker"
+DASHBOARD_ETH_EN     = "https://btc-tracker.up.railway.app/eth-tracker"
+DASHBOARD_ETH_KO     = "https://btc-tracker.up.railway.app/eth-tracker-ko"
 SCREENSHOT_TIMEOUT_S = 60
 PAGE_TIMEOUT_MS      = 30_000
 DATA_TIMEOUT_MS      = 25_000
@@ -31,12 +33,15 @@ class BriefError(Exception):
     pass
 
 
-def _url_for_lang(lang: str) -> str:
-    return DASHBOARD_KO if lang == "ko" else DASHBOARD_EN
+def _url_for_lang_btc(lang: str) -> str:
+    return DASHBOARD_BTC_KO if lang == "ko" else DASHBOARD_BTC_EN
+
+def _url_for_lang_eth(lang: str) -> str:
+    return DASHBOARD_ETH_KO if lang == "ko" else DASHBOARD_ETH_EN
 
 
-async def take_screenshot(lang: str) -> bytes:
-    url          = _url_for_lang(lang)
+async def take_screenshot(lang: str, coin: str = "btc") -> bytes:
+    url          = _url_for_lang_eth(lang) if coin == "eth" else _url_for_lang_btc(lang)
     loading_text = "연결 중..." if lang == "ko" else "Connecting..."
     log.info("[brief] screenshotting %s", url)
 
@@ -83,10 +88,10 @@ async def take_screenshot(lang: str) -> bytes:
         raise BriefError(f"Screenshot failed for {url}: {exc}") from exc
 
 
-async def take_screenshot_with_timeout(lang: str) -> bytes:
+async def take_screenshot_with_timeout(lang: str, coin: str = "btc") -> bytes:
     try:
         return await asyncio.wait_for(
-            take_screenshot(lang),
+            take_screenshot(lang, coin),
             timeout=SCREENSHOT_TIMEOUT_S,
         )
     except asyncio.TimeoutError as exc:
