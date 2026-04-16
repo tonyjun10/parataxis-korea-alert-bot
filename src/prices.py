@@ -227,15 +227,22 @@ def fmt_stock_price(result: dict, lang: str) -> str:
     chg_fmt   = f"{arrow} ₩{abs(change):,.0f} ({chg_pct}%)"
     stale_note = " ⚠️ (cached)" if is_stale else ""
 
+    # Determine company name from ticker
+    _names = {
+        "288330": {"en": "Parataxis Korea",     "ko": "파라택시스 코리아"},
+        "290560": {"en": "Parataxis Ethereum",  "ko": "파라택시스 이더리움"},
+    }
+    names = _names.get(str(ticker), {"en": f"Stock {ticker}", "ko": f"주식 {ticker}"})
+
     if lang == "ko":
-        name = "파라택시스 코리아"
+        name = names["ko"]
         return (
             f"📈 <b>{name}</b>  <code>{exchange}: {ticker}</code>\n"
             f"{label}: <b>{price_fmt}</b>{stale_note}\n"
             f"전일 대비: {chg_fmt}"
         )
     else:
-        name = "Parataxis Korea"
+        name = names["en"]
         en_label = "Live price" if result.get("is_live") else "Last close"
         if is_stale:
             en_label += " (cached)"
