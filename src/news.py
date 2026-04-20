@@ -30,7 +30,7 @@ COMPANY_QUERIES: dict[str, list[str]] = {
     ],
     "bitmax":        ["비트맥스", "Bitmax Korea"],
     "bitplanet":     ["비트플래닛", "Bitplanet Korea"],
-    "parataxiseth":  ["파라택시스이더리움", "파라택시스 이더리움", "Parataxis Ethereum", "290560 KOSDAQ"],
+    "parataxiseth":  ["파라택시스이더리움", "파라택시스 이더리움", "Parataxis Ethereum", "신시웨이", "Sinsiway", "290560 KOSDAQ"],
     "microstrategy": ["MicroStrategy", "MSTR bitcoin", "Strategy MicroStrategy"],
 }
 
@@ -231,6 +231,39 @@ def _get_news_sync(company_key: str, limit: int = 5) -> list[dict]:
     return results[:limit]
 
 
+
+def _get_parataxiseth_news_sync(limit: int) -> list[dict]:
+    """
+    Run all Parataxis Ethereum / Sinsiway query variants, merge, de-dup, sort newest-first.
+    Searches both new branding (Parataxis Ethereum) and old (Sinsiway/신시웨이).
+    """
+    cutoff     = datetime.now(timezone.utc) - timedelta(days=PARATAXIS_MAX_AGE_DAYS)
+    seen_keys: set[str] = set()
+    merged:    list[dict] = []
+
+    for query in COMPANY_QUERIES["parataxiseth"]:
+        for item in _fetch_rss_sync(query, limit):
+            url = item.get("url", "")
+            if not url:
+                continue
+            key = _url_key(url)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            dt: datetime | None = item["_dt"]
+            if dt is not None and dt < cutoff:
+                continue
+            merged.append(item)
+
+    merged.sort(
+        key=lambda it: it["_dt"] if it["_dt"] is not None else datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    result = [_strip_dt(it) for it in merged[:limit]]
+    log.info("Parataxis ETH news: %d items after merge/filter/sort (limit=%d)", len(result), limit)
+    return result
+
+
 # ── Public async entry point ──────────────────────────────────────────────────
 
 async def get_news(company_key: str, limit: int = 5) -> list[dict]:
@@ -238,4 +271,6 @@ async def get_news(company_key: str, limit: int = 5) -> list[dict]:
     key = company_key.lower()
     if key == "parataxis":
         return await asyncio.to_thread(_get_parataxis_news_sync, limit)
+    if key == "parataxiseth":
+        return await asyncio.to_thread(_get_parataxiseth_news_sync, limit)
     return await asyncio.to_thread(_get_news_sync, key, limit)
