@@ -119,7 +119,10 @@ def _fetch_rss_sync(query: str, limit: int) -> list[dict]:
     for sorting; strip it before returning results to consumers.
     """
     try:
-        feed = feedparser.parse(_rss_url(query))
+        feed = feedparser.parse(
+            _rss_url(query),
+            agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         items = []
         for e in feed.entries[:limit]:
             dt = _parse_entry_dt(e)
@@ -142,12 +145,12 @@ def _strip_dt(item: dict) -> dict:
 
 # ── Parataxis Korea pipeline ───────────────────────────────────────────────────
 
-def _get_parataxis_news_sync(limit: int) -> list[dict]:
+def _get_parataxis_news_sync(limit: int, no_age_limit: bool = False) -> list[dict]:
     """
     Run all Parataxis query variants, merge results, de-dup by normalised URL,
-    discard items older than PARATAXIS_MAX_AGE_DAYS, sort newest-first.
+    discard items older than PARATAXIS_MAX_AGE_DAYS (unless no_age_limit=True), sort newest-first.
     """
-    cutoff     = datetime.now(timezone.utc) - timedelta(days=PARATAXIS_MAX_AGE_DAYS)
+    cutoff     = None if no_age_limit else datetime.now(timezone.utc) - timedelta(days=PARATAXIS_MAX_AGE_DAYS)
     seen_keys: set[str] = set()
     merged:    list[dict] = []
 
@@ -162,7 +165,7 @@ def _get_parataxis_news_sync(limit: int) -> list[dict]:
             seen_keys.add(key)
 
             dt: datetime | None = item["_dt"]
-            if dt is not None and dt < cutoff:
+            if cutoff is not None and dt is not None and dt < cutoff:
                 log.debug("Parataxis: dropping old item (%s) %s", item["time"], item["title"][:60])
                 continue
 
@@ -232,12 +235,12 @@ def _get_news_sync(company_key: str, limit: int = 5) -> list[dict]:
 
 
 
-def _get_parataxiseth_news_sync(limit: int) -> list[dict]:
+def _get_parataxiseth_news_sync(limit: int, no_age_limit: bool = False) -> list[dict]:
     """
     Run all Parataxis Ethereum / Sinsiway query variants, merge, de-dup, sort newest-first.
     Searches both new branding (Parataxis Ethereum) and old (Sinsiway/신시웨이).
     """
-    cutoff     = datetime.now(timezone.utc) - timedelta(days=PARATAXIS_MAX_AGE_DAYS)
+    cutoff     = None if no_age_limit else datetime.now(timezone.utc) - timedelta(days=PARATAXIS_MAX_AGE_DAYS)
     seen_keys: set[str] = set()
     merged:    list[dict] = []
 
@@ -251,7 +254,7 @@ def _get_parataxiseth_news_sync(limit: int) -> list[dict]:
                 continue
             seen_keys.add(key)
             dt: datetime | None = item["_dt"]
-            if dt is not None and dt < cutoff:
+            if cutoff is not None and dt is not None and dt < cutoff:
                 continue
             merged.append(item)
 
@@ -266,11 +269,13 @@ def _get_parataxiseth_news_sync(limit: int) -> list[dict]:
 
 # ── Public async entry point ──────────────────────────────────────────────────
 
-async def get_news(company_key: str, limit: int = 5) -> list[dict]:
-    """Async entry point — runs blocking fetch in a thread pool."""
+async def get_news(company_key: str, limit: int = 5, no_age_limit: bool = False) -> list[dict]:
+    """Async entry point — runs blocking fetch in a thread pool.
+    Pass no_age_limit=True for on-demand fetches to bypass the age cutoff.
+    """
     key = company_key.lower()
     if key == "parataxis":
-        return await asyncio.to_thread(_get_parataxis_news_sync, limit)
+        return await asyncio.to_thread(_get_parataxis_news_sync, limit, no_age_limit)
     if key == "parataxiseth":
-        return await asyncio.to_thread(_get_parataxiseth_news_sync, limit)
+        return await asyncio.to_thread(_get_parataxiseth_news_sync, limit, no_age_limit)
     return await asyncio.to_thread(_get_news_sync, key, limit)
