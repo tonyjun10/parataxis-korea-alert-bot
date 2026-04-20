@@ -936,7 +936,9 @@ async def _fetch_text(company: str, category: str, lang: str) -> str:
     if category == "disclosures" and company in _DART_COMPANIES:
         items = await get_disclosures(company)
         return fmt_disclosures(items, lang)
-    items = await get_news(company)
+    # no_age_limit=True so on-demand fetches always show recent articles
+    # regardless of the monitor's age filter
+    items = await get_news(company, no_age_limit=True)
     return fmt_news(items, lang)
 
 
