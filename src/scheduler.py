@@ -154,7 +154,7 @@ async def _check_disclosures(bot: Bot, company: str) -> int:
     # Log to watchlist sheet (fire-and-forget)
     disc_title = best.get("title", best.get("report_nm", ""))
     disc_url   = best.get("url", "")
-    asyncio.ensure_future(_sheets.append_watchlist_entry(company, "Disclosure", disc_title, disc_url))
+    asyncio.create_task(_sheets.append_watchlist_entry(company, "Disclosure", disc_title, disc_url))
 
     alerted = 0
     for chat in chats:
@@ -238,7 +238,7 @@ async def _check_news(bot: Bot, company: str) -> int:
     best = new_items[0]
 
     # Log to watchlist sheet (fire-and-forget)
-    asyncio.ensure_future(_sheets.append_watchlist_entry(
+    asyncio.create_task(_sheets.append_watchlist_entry(
         company, "News", best.get("title", ""), best.get("url", "")))
 
     # ── Translate title + optional summary (done once, reused for all chats) ──
