@@ -97,15 +97,18 @@ async def _monitor_job(context) -> None:
 
     total_alerted = 0
     try:
-        # Run all disclosure + news checks in parallel across companies
-        disc_tasks = [_check_disclosures(bot, company) for company in _DART_COMPANIES]
-        news_tasks = [_check_news(bot, company)        for company in _NEWS_COMPANIES]
-        results = await asyncio.gather(*disc_tasks, *news_tasks, return_exceptions=True)
-        for r in results:
-            if isinstance(r, Exception):
-                log.error("Monitor task error: %s", r)
-            else:
-                total_alerted += r
+        # Run each company check sequentially but yield to event loop between each
+        # This prevents the monitor from starving button press handlers
+        for company in _DART_COMPANIES:
+            result = await _check_disclosures(bot, company)
+            total_alerted += result
+            await asyncio.sleep(0)  # yield to event loop
+
+        for company in _NEWS_COMPANIES:
+            result = await _check_news(bot, company)
+            total_alerted += result
+            await asyncio.sleep(0)  # yield to event loop
+
     except Exception:
         log.exception("Unhandled exception in monitor job")
 
