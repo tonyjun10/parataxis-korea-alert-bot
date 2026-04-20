@@ -980,17 +980,19 @@ async def cmd_brief(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     wait_msg = "⏳ 대시보드 스크린샷 캡처 중…" if lang == "ko" else "⏳ Capturing dashboard screenshots…"
     sent = await update.message.reply_text(wait_msg)
 
-    # Fetch BTC and ETH screenshots sequentially (Playwright can't run two at once)
-    btc_bytes = eth_bytes = None
-    try:
-        btc_bytes = await take_screenshot_with_timeout(lang, "btc")
-    except BriefError as exc:
-        log.error("cmd_brief BTC screenshot error: %s", exc)
+    # Fetch BTC and ETH screenshots in parallel (each launches its own browser)
+    async def _safe_shot(coin):
+        try:
+            return await take_screenshot_with_timeout(lang, coin)
+        except BriefError as exc:
+            log.error("cmd_brief %s screenshot error: %s", coin.upper(), exc)
+            return None
 
-    try:
-        eth_bytes = await take_screenshot_with_timeout(lang, "eth")
-    except BriefError as exc:
-        log.error("cmd_brief ETH screenshot error: %s", exc)
+    import asyncio as _asyncio
+    btc_bytes, eth_bytes = await _asyncio.gather(
+        _safe_shot("btc"),
+        _safe_shot("eth"),
+    )
 
     await sent.delete()
 
@@ -1173,23 +1175,30 @@ async def cmd_daily(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     await sent.edit_text(header, parse_mode=ParseMode.HTML)
 
-    # 2. BTC screenshot
-    try:
-        btc_png = await take_screenshot_with_timeout(lang, "btc")
+    # 2+3. BTC + ETH screenshots in parallel
+    async def _safe_daily_shot(coin):
+        try:
+            return await take_screenshot_with_timeout(lang, coin)
+        except BriefError as exc:
+            log.error("cmd_daily %s screenshot error: %s", coin.upper(), exc)
+            return None
+
+    btc_png, eth_png = await _asyncio.gather(
+        _safe_daily_shot("btc"),
+        _safe_daily_shot("eth"),
+    )
+
+    if btc_png:
         btc_cap = f"📊 Bitcoin Dashboard — {date_str}" if lang == "en" else f"📊 비트코인 대시보드 — {date_str}"
         await update.message.reply_photo(photo=btc_png, caption=btc_cap)
-    except BriefError as exc:
-        log.error("cmd_daily BTC screenshot error: %s", exc)
+    else:
         err = "⚠️ BTC 스크린샷을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not capture BTC dashboard."
         await update.message.reply_text(err)
 
-    # 3. ETH screenshot
-    try:
-        eth_png = await take_screenshot_with_timeout(lang, "eth")
+    if eth_png:
         eth_cap = f"📊 Ethereum Dashboard — {date_str}" if lang == "en" else f"📊 이더리움 대시보드 — {date_str}"
         await update.message.reply_photo(photo=eth_png, caption=eth_cap)
-    except BriefError as exc:
-        log.error("cmd_daily ETH screenshot error: %s", exc)
+    else:
         err = "⚠️ ETH 스크린샷을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not capture ETH dashboard."
         await update.message.reply_text(err)
 
