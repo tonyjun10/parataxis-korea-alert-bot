@@ -133,14 +133,20 @@ async def _show_language_prompt(update: Update):
     await update.message.reply_text(
         "👋 <b>Welcome to the Parataxis Family Bot</b>\n\n"
         "🤖 <b>What you can do with this bot:</b>\n"
-        "• 📊 Subscribe to Daily Updates — BTC/ETH prices, stock prices, news feeds\n"
-        "• 🌐 Translate — /t + text for automatic Korean↔English translation\n"
-        "• 📋 Kakao Summary — /kakaoexport for a summary of the Kakao shareholder groupchat\n\n"
+        "• 📊 /subscribe — Subscribe to daily updates (BTC/ETH prices, stock prices, news feeds)\n"
+        "• 📅 /daily — Daily snapshot of prices, stocks &amp; mining stats\n"
+        "• 📸 /brief — Live BTC &amp; ETH dashboard screenshots\n"
+        "• ⛏️ /mining — Current mining stats\n"
+        "• 🌐 /t — Translate Korean↔English automatically\n"
+        "• 📋 /kakaoexport — Summary of the Kakao shareholder groupchat\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🤖 <b>이 봇으로 할 수 있는 것:</b>\n"
-        "• 📊 데일리 업데이트 구독 — BTC/ETH 가격, 주식, 뉴스\n"
-        "• 🌐 번역 — /t + 텍스트로 자동 한국어↔영어 번역\n"
-        "• 📋 카카오 요약 — /kakaoexport 로 주주 단체 카카오톡 요약 확인\n\n"
+        "• 📊 /subscribe — 데일리 업데이트 구독 (BTC/ETH 가격, 주식, 뉴스)\n"
+        "• 📅 /daily — 가격, 주식 &amp; 채굴 현황 데일리 스냅샷\n"
+        "• 📸 /brief — BTC &amp; ETH 라이브 대시보드 스크린샷\n"
+        "• ⛏️ /mining — 현재 채굴 현황\n"
+        "• 🌐 /t — 한국어↔영어 자동 번역\n"
+        "• 📋 /kakaoexport — 주주 단체 카카오톡 요약 확인\n\n"
         "Select your preferred language / 언어를 선택해 주세요:",
         reply_markup=kb_language(),
         parse_mode=ParseMode.HTML,
@@ -559,19 +565,25 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if selected_lang == "ko":
             welcome_text = (
                 "✅ 언어가 <b>한국어</b>로 설정되었습니다.\n\n"
-                "🤖 <b>파라택시스 패밀리 봇으로 할 수 있는 것:</b>\n\n"
-                "• 📊 <b>데일리 업데이트 구독</b> — BTC/ETH 가격, 주식 가격, 뉴스 피드\n"
-                "• 🌐 <b>번역</b> — /t + 텍스트로 자동 한국어↔영어 번역\n"
-                "• 📋 <b>카카오 요약</b> — /kakaoexport 로 주주 단체 카카오톡 요약 확인\n\n"
+                "🤖 <b>파라택시스 패밀리 봇으로 할 수 있는 것:</b>\n"
+                "• 📊 /subscribe — 데일리 업데이트 구독 (BTC/ETH 가격, 주식, 뉴스)\n"
+                "• 📅 /daily — 가격, 주식 &amp; 채굴 현황 데일리 스냅샷\n"
+                "• 📸 /brief — BTC &amp; ETH 라이브 대시보드 스크린샷\n"
+                "• ⛏️ /mining — 현재 채굴 현황\n"
+                "• 🌐 /t — 한국어↔영어 자동 번역\n"
+                "• 📋 /kakaoexport — 주주 단체 카카오톡 요약 확인\n\n"
                 "아래 메뉴에서 선택하세요:"
             )
         else:
             welcome_text = (
                 "✅ Language set to <b>English</b>.\n\n"
-                "🤖 <b>What you can do with this bot:</b>\n\n"
-                "• 📊 <b>Subscribe to Daily Updates</b> — BTC/ETH prices, stock prices, news feeds\n"
-                "• 🌐 <b>Translate</b> — /t + text to auto-translate Korean↔English\n"
-                "• 📋 <b>Kakao Summary</b> — /kakaoexport for a summary of the Kakao shareholder groupchat\n\n"
+                "🤖 <b>What you can do with this bot:</b>\n"
+                "• 📊 /subscribe — Subscribe to daily updates (BTC/ETH prices, stock prices, news feeds)\n"
+                "• 📅 /daily — Daily snapshot of prices, stocks &amp; mining stats\n"
+                "• 📸 /brief — Live BTC &amp; ETH dashboard screenshots\n"
+                "• ⛏️ /mining — Current mining stats\n"
+                "• 🌐 /t — Translate Korean↔English automatically\n"
+                "• 📋 /kakaoexport — Summary of the Kakao shareholder groupchat\n\n"
                 "Select from the menu below:"
             )
         await query.edit_message_text(
@@ -586,14 +598,20 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "👋 <b>Welcome to the Parataxis Family Bot</b>\n\n"
             "🤖 <b>What you can do with this bot:</b>\n"
-            "• 📊 Subscribe to Daily Updates — BTC/ETH prices, stock prices, news feeds\n"
-            "• 🌐 Translate — /t + text for automatic Korean↔English translation\n"
-            "• 📋 Kakao Summary — /kakaoexport for a summary of the Kakao shareholder groupchat\n\n"
+            "• 📊 /subscribe — Subscribe to daily updates (BTC/ETH prices, stock prices, news feeds)\n"
+            "• 📅 /daily — Daily snapshot of prices, stocks &amp; mining stats\n"
+            "• 📸 /brief — Live BTC &amp; ETH dashboard screenshots\n"
+            "• ⛏️ /mining — Current mining stats\n"
+            "• 🌐 /t — Translate Korean↔English automatically\n"
+            "• 📋 /kakaoexport — Summary of the Kakao shareholder groupchat\n\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "🤖 <b>이 봇으로 할 수 있는 것:</b>\n"
-            "• 📊 데일리 업데이트 구독 — BTC/ETH 가격, 주식, 뉴스\n"
-            "• 🌐 번역 — /t + 텍스트로 자동 한국어↔영어 번역\n"
-            "• 📋 카카오 요약 — /kakaoexport 로 주주 단체 카카오톡 요약 확인\n\n"
+            "• 📊 /subscribe — 데일리 업데이트 구독 (BTC/ETH 가격, 주식, 뉴스)\n"
+            "• 📅 /daily — 가격, 주식 &amp; 채굴 현황 데일리 스냅샷\n"
+            "• 📸 /brief — BTC &amp; ETH 라이브 대시보드 스크린샷\n"
+            "• ⛏️ /mining — 현재 채굴 현황\n"
+            "• 🌐 /t — 한국어↔영어 자동 번역\n"
+            "• 📋 /kakaoexport — 주주 단체 카카오톡 요약 확인\n\n"
             "Select your preferred language / 언어를 선택해 주세요:",
             reply_markup=kb_language(),
             parse_mode=ParseMode.HTML,
@@ -649,18 +667,45 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML,
         )
 
-    # ── Company selection ───────────────────────────────────────────────
+    # ── Company selection — fetch immediately ───────────────────────────
     elif data.startswith("company:"):
         company = data.split(":")[1]
         db.log_event("click", user.id, user.username, chat_id, data)
-        label  = _company_label(company, lang)
-        prompt = (
-            f"<b>{label}</b> 카테고리를 선택하세요:"
-            if lang == "ko" else
-            f"Select category for <b>{label}</b>:"
-        )
+        label = _company_label(company, lang)
+        loading = f"⏳ {label} 데이터 불러오는 중…" if lang == "ko" else f"⏳ Loading {label}…"
+        await query.edit_message_text(loading)
+
+        # Fetch news and disclosures in parallel
+        import asyncio as _asyncio
+        news_task = get_news(company, no_age_limit=True)
+        disc_task = get_disclosures(company) if company in _DART_COMPANIES else None
+
+        if disc_task:
+            news_items, disc_items = await _asyncio.gather(news_task, disc_task, return_exceptions=True)
+            if isinstance(news_items, Exception): news_items = []
+            if isinstance(disc_items, Exception): disc_items = []
+        else:
+            news_items = await news_task
+            disc_items = []
+
+        # Build combined message
+        sections = []
+        if disc_items and not (len(disc_items) == 1 and "error" in disc_items[0]):
+            sections.append(fmt_disclosures(disc_items, lang))
+        if news_items:
+            sections.append(fmt_news(news_items, lang))
+        if not sections:
+            text = f"<b>{label}</b>\n\n" + (
+                "📭 데이터를 찾을 수 없습니다." if lang == "ko" else "📭 No data found."
+            )
+        else:
+            text = f"<b>📁 {label}</b>\n\n" + "\n\n".join(sections)
+
         await query.edit_message_text(
-            prompt, reply_markup=kb_category(lang, company), parse_mode=ParseMode.HTML,
+            text,
+            reply_markup=kb_after_result(lang, company),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
         )
 
     # ── Category selection ──────────────────────────────────────────────
