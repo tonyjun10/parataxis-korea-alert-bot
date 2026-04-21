@@ -22,9 +22,9 @@ CORP_CODE_CACHE = Path("data/corp_codes.xml")
 
 # Manual overrides — fill in 8-digit DART corp_code if known
 CORP_CODE_OVERRIDES: dict[str, str] = {
-    "parataxis":    "",
-    "bitmax":       "",
-    "bitplanet":    "",
+    "parataxis":    "01227039",
+    "bitmax":       "01409095",
+    "bitplanet":    "00351579",
     "parataxiseth": "01130849",
 }
 
