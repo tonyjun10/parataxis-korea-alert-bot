@@ -125,16 +125,16 @@ def kb_price(lang: str) -> InlineKeyboardMarkup:
 # ── After result ───────────────────────────────────────────────────────────────
 
 def kb_after_result(lang: str, company: str) -> InlineKeyboardMarkup:
-    if lang == "ko":
-        rows = [[
-            InlineKeyboardButton("⬅️ 뒤로", callback_data=f"nav:back_to_cat:{company}"),
+    """Back/Home nav after a company result — now includes Search button."""
+    search_label = "🔍 검색" if lang == "ko" else "🔍 Search"
+    back_label   = "⬅️ 뒤로" if lang == "ko" else "⬅️ Back"
+    rows = [
+        [InlineKeyboardButton(search_label, callback_data=f"cat:search:{company}")],
+        [
+            InlineKeyboardButton(back_label, callback_data="nav:main"),
             InlineKeyboardButton("🏠 Home",  callback_data="nav:home"),
-        ]]
-    else:
-        rows = [[
-            InlineKeyboardButton("⬅️ Back", callback_data=f"nav:back_to_cat:{company}"),
-            InlineKeyboardButton("🏠 Home",  callback_data="nav:home"),
-        ]]
+        ],
+    ]
     return InlineKeyboardMarkup(rows)
 
 
