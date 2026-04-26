@@ -194,8 +194,6 @@ def _parse_item_dt(item: dict) -> datetime | None:
 async def _check_news(bot: Bot, company: str) -> int:
     chats = db.get_chats_for(company, "news")
     log.info("[news/%s] subscribed chats: %d", company, len(chats))
-    if not chats:
-        return 0
 
     try:
         items = await get_news(company, limit=10)
@@ -216,7 +214,6 @@ async def _check_news(bot: Bot, company: str) -> int:
         dt = _parse_item_dt(it)
         if dt is not None and dt < cutoff:
             skipped_old += 1
-            # Still mark as seen so it never resurfaces
             db.mark_news_seen(url, company)
             continue
         recent_items.append(it)
@@ -240,9 +237,12 @@ async def _check_news(bot: Bot, company: str) -> int:
     new_items.sort(key=_news_key, reverse=True)
     best = new_items[0]
 
-    # Log to watchlist sheet (fire-and-forget)
+    # Always log to watchlist sheet regardless of subscribed chats
     asyncio.create_task(_sheets.append_watchlist_entry(
         company, "News", best.get("title", ""), best.get("url", "")))
+
+    if not chats:
+        return 0
 
     # ── Translate title + optional summary (done once, reused for all chats) ──
     original_title = best.get("title", "")
