@@ -166,6 +166,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• /brief — BTC + ETH 대시보드 스크린샷\n"
             "• /daily — 데일리 스냅샷 (가격 + 주식 + 채굴)\n"
             "• /mining — 채굴 현황 보기\n"
+            "• /fx — USD/KRW 환율 확인\n"
             "• /t [텍스트] — 한국어↔영어 번역\n"
             "• /help — 이 도움말"
         )
@@ -178,6 +179,7 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• /brief — BTC + ETH dashboard screenshots\n"
             "• /daily — Daily snapshot (prices + stocks + mining)\n"
             "• /mining — Get mining stats right now\n"
+            "• /fx — Check USD/KRW exchange rate\n"
             "• /t [text] — Translate Korean↔English\n"
             "• /help — This message"
         )
@@ -575,14 +577,14 @@ async def cmd_fx(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if lang == "ko":
             text = (
                 f"💱 <b>USD/KRW 환율</b>\n\n"
-                f"• 1 USD = <b>₩{rate:,2f}</b>\n"
+                f"• 1 USD = <b>₩{rate:,.2f}</b>\n"
                 f"• 1,000 KRW = <b>${krw_per:.4f}</b>\n\n"
                 f"<i>출처: {source}</i>"
             )
         else:
             text = (
                 f"💱 <b>USD/KRW Exchange Rate</b>\n\n"
-                f"• 1 USD = <b>₩{rate:,2f}</b>\n"
+                f"• 1 USD = <b>₩{rate:,.2f}</b>\n"
                 f"• 1,000 KRW = <b>${krw_per:.4f}</b>\n\n"
                 f"<i>Source: {source}</i>"
             )
