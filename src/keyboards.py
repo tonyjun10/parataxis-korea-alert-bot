@@ -34,6 +34,7 @@ def kb_main(lang: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("💰 가격",             callback_data="menu:price")],
             [InlineKeyboardButton("🔔 구독 관리",        callback_data="menu:subscribe")],
             [InlineKeyboardButton("📋 로그",             callback_data="menu:logs")],
+            [InlineKeyboardButton("💱 환율",              callback_data="menu:exchange_rate")],
             [InlineKeyboardButton("🌐 번역 도움말",       callback_data="menu:translate_help")],
         ]
     else:
@@ -46,6 +47,7 @@ def kb_main(lang: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("💰 Price",           callback_data="menu:price")],
             [InlineKeyboardButton("🔔 Subscribe",       callback_data="menu:subscribe")],
             [InlineKeyboardButton("📋 Logs",            callback_data="menu:logs")],
+            [InlineKeyboardButton("💱 Exchange Rate",   callback_data="menu:exchange_rate")],
             [InlineKeyboardButton("🌐 Translate",       callback_data="menu:translate_help")],
         ]
     return InlineKeyboardMarkup(rows)
