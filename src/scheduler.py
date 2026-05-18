@@ -27,6 +27,7 @@ from brief import BriefError, take_screenshot_with_timeout
 from luxor import LuxorError, fmt_mining_stats, get_mining_stats
 import sheets as _sheets
 from prices import fmt_stock_price, get_stock_price_krw, PARATAXIS_TICKER
+from handlers import _fetch_usd_krw
 from translate import summarize_article, translate_title
 
 log  = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ SEOUL = ZoneInfo("Asia/Seoul")
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 NEWS_MAX_AGE_DAYS = 7   # do not alert on news older than this
+FX_CHANGE_THRESHOLD = 0.01  # 1.0% move from last baseline before alerting
 
 _DART_COMPANIES = ["parataxis", "parataxiseth", "bitmax", "bitplanet"]
 _NEWS_COMPANIES = ["parataxis", "parataxiseth", "bitmax", "bitplanet", "microstrategy"]
@@ -86,6 +88,16 @@ def register_jobs(app: Application, interval_minutes: int = 10):
         name="mining",
     )
     log.info("Mining job registered — every %d min.", interval_minutes)
+
+    # Exchange-rate movement alert — every 30 min
+    app.job_queue.run_repeating(
+        _exchange_rate_job,
+        interval=30 * 60,
+        first=120,
+        name="exchange_rate",
+        data={},
+    )
+    log.info("Exchange-rate job registered — every 30 min.")
 
 
 async def _monitor_job(context) -> None:
@@ -476,6 +488,81 @@ async def _mining_job(context) -> None:
 
     log.info("[mining] alerted %d chat(s)", alerted)
     log.info("── MINING JOB COMPLETE ──")
+
+
+# ── Exchange-rate movement job ────────────────────────────────────────────────
+
+async def _exchange_rate_job(context) -> None:
+    """
+    Runs every 30 min. Sends a USD/KRW alert only when the rate moves by
+    FX_CHANGE_THRESHOLD or more from the last stored baseline. The first
+    successful run only stores the baseline and does not alert.
+    """
+    bot: Bot = context.bot
+    log.info("── EXCHANGE RATE JOB START ──")
+
+    chats = db.get_chats_for("exchange_rate", "fx_alert")
+    log.info("[exchange] subscribed chats: %d", len(chats))
+    if not chats:
+        return
+
+    result = await _fetch_usd_krw()
+    if not result:
+        log.warning("[exchange] rate fetch failed")
+        return
+
+    rate = float(result["rate"])
+    source = result.get("source", "SMBS")
+
+    data = context.job.data or {}
+    last_rate = data.get("last_rate")
+
+    # First successful run sets the baseline only. No alert on startup/redeploy.
+    if not last_rate:
+        context.job.data = {"last_rate": rate, "source": source}
+        log.info("[exchange] baseline set: %.2f (%s)", rate, source)
+        return
+
+    change_pct = (rate - float(last_rate)) / float(last_rate)
+    if abs(change_pct) < FX_CHANGE_THRESHOLD:
+        log.info("[exchange] no material change: %.2f → %.2f (%.2f%%)", last_rate, rate, change_pct * 100)
+        return
+
+    context.job.data = {"last_rate": rate, "source": source}
+
+    alerted = 0
+    for chat in chats:
+        chat_id = chat["chat_id"]
+        lang = chat.get("lang", "en")
+        msg = _fmt_exchange_rate_alert(lang, rate, float(last_rate), change_pct, source)
+        if await _send(bot, chat_id, msg):
+            alerted += 1
+
+    log.info("[exchange] alerted %d chat(s)", alerted)
+    log.info("── EXCHANGE RATE JOB COMPLETE ──")
+
+
+def _fmt_exchange_rate_alert(lang: str, rate: float, last_rate: float, change_pct: float, source: str) -> str:
+    direction = "상승" if change_pct > 0 else "하락"
+    direction_en = "increased" if change_pct > 0 else "decreased"
+    arrow = "▲" if change_pct > 0 else "▼"
+
+    if lang == "ko":
+        return (
+            f"💱 <b>USD/KRW 환율 변동 알림</b>\n\n"
+            f"1 USD = <b>₩{rate:,.2f}</b>\n"
+            f"이전 기준: ₩{last_rate:,.2f}\n"
+            f"변동률: <b>{arrow} {abs(change_pct) * 100:.2f}% {direction}</b>\n\n"
+            f"<i>출처: {source}</i>"
+        )
+
+    return (
+        f"💱 <b>USD/KRW Exchange Rate Alert</b>\n\n"
+        f"1 USD = <b>₩{rate:,.2f}</b>\n"
+        f"Previous baseline: ₩{last_rate:,.2f}\n"
+        f"Change: <b>{arrow} {abs(change_pct) * 100:.2f}% {direction_en}</b>\n\n"
+        f"<i>Source: {source}</i>"
+    )
 
 
 # ── Daily snapshot job ─────────────────────────────────────────────────────────
