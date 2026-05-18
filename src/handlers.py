@@ -194,6 +194,7 @@ _SUB2_MAP = {
     "daily_brief":    [("brief", "brief")],
     "mining":         [("mining", "mining")],
     "daily_snapshot": [("daily", "daily")],
+    "exchange_rate":  [("exchange_rate", "fx_alert")],
 }
 
 def _get_sub2_state(chat_id: int) -> set:
@@ -209,6 +210,8 @@ def _get_sub2_state(chat_id: int) -> set:
     if ("daily", "daily") in company_cats:
         active.add("stock_prices")
         active.add("daily_snapshot")
+    if ("exchange_rate", "fx_alert") in company_cats:
+        active.add("exchange_rate")
     # Parataxis news: both parataxis and parataxiseth news subscribed
     if ("parataxis", "news") in company_cats and ("parataxiseth", "news") in company_cats:
         active.add("parataxis_news")
@@ -862,6 +865,12 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 db.unsubscribe(chat_id, company="daily", category="daily")
             else:
                 db.subscribe(chat_id, "daily", "daily")
+
+        elif key == "exchange_rate":
+            if "exchange_rate" in state:
+                db.unsubscribe(chat_id, company="exchange_rate", category="fx_alert")
+            else:
+                db.subscribe(chat_id, "exchange_rate", "fx_alert")
 
         elif key == "parataxis_news":
             # Parataxis news feeds = parataxis + parataxiseth news + disclosures
