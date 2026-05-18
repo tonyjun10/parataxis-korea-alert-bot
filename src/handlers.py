@@ -567,7 +567,7 @@ async def cmd_fx(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     db.log_event("fx", user.id if user else None, user.username if user else None, chat_id)
 
     loading = "⏳ 환율 불러오는 중…" if lang == "ko" else "⏳ Fetching exchange rate…"
-    await update.message.reply_text(loading)
+    loading_msg = await update.message.reply_text(loading)
 
     result = await _fetch_usd_krw()
     if result:
@@ -591,7 +591,7 @@ async def cmd_fx(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         text = "⚠️ 환율을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not fetch exchange rate."
 
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    await loading_msg.edit_text(text, parse_mode=ParseMode.HTML)
 
 async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query   = update.callback_query
