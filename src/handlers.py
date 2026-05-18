@@ -811,9 +811,10 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 )
         else:
             text = "⚠️ 환율을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not fetch exchange rate."
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton as IKB
         nav = InlineKeyboardMarkup([[
-            InlineKeyboardButton("⬅️ 뒤로" if lang == "ko" else "⬅️ Back", callback_data="nav:main"),
-            InlineKeyboardButton("🏠 Home", callback_data="nav:home"),
+            IKB("⬅️ 뒤로" if lang == "ko" else "⬅️ Back", callback_data="nav:main"),
+            IKB("🏠 Home", callback_data="nav:home"),
         ]])
         await query.edit_message_text(text, reply_markup=nav, parse_mode=ParseMode.HTML)
 
