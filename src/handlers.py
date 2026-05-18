@@ -519,114 +519,41 @@ async def cmd_announcement(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def _fetch_usd_krw() -> dict | None:
     """
-    Fetch USD/KRW rate from Korea Eximbank public exchange-rate API.
-    Uses KFTC/Seoul Money Brokerage reference rate when available.
-    Falls back to the SMBS page scrape only if the API is unavailable.
+    Fetch USD/KRW rate from SMBS (Seoul Money Brokerage Services).
+    Falls back to ExchangeRate-API if SMBS is unavailable.
     """
-    import os as _os
-    import re as _re
-    from datetime import datetime as _datetime, timedelta as _timedelta
-    from zoneinfo import ZoneInfo as _ZoneInfo
-
     import httpx as _httpx
+    import re as _re
 
-    def _row_get(row: dict, key: str, default=""):
-        """Eximbank docs show uppercase keys, actual JSON often uses lowercase."""
-        return row.get(key) or row.get(key.lower()) or row.get(key.upper()) or default
-
-    def _parse_rate(raw) -> float | None:
-        try:
-            rate = float(str(raw).strip().replace(",", ""))
-        except (TypeError, ValueError):
-            return None
-        return rate if 900 < rate < 2000 else None
-
-    # Primary: Korea Eximbank / public data API
-    authkey = (
-        _os.environ.get("EXIMBANK_API_KEY")
-        or _os.environ.get("KOREAEXIM_API_KEY")
-        or _os.environ.get("KOREA_EXIMBANK_API_KEY")
-        or ""
-    ).strip()
-
-    if authkey:
-        try:
-            base_url = "https://oapi.koreaexim.go.kr/site/program/financial/exchangeJSON"
-            today = _datetime.now(_ZoneInfo("Asia/Seoul")).date()
-
-            async with _httpx.AsyncClient(timeout=10) as client:
-                for days_back in range(0, 10):
-                    search_date = (today - _timedelta(days=days_back)).strftime("%Y%m%d")
-                    r = await client.get(
-                        base_url,
-                        params={
-                            "authkey": authkey,
-                            "searchdate": search_date,
-                            "data": "AP01",
-                        },
-                    )
-                    r.raise_for_status()
-                    data = r.json()
-
-                    if not data:
-                        log.warning("[exchange] Korea Eximbank returned empty data for %s", search_date)
-                        continue
-
-                    if not isinstance(data, list):
-                        log.warning("[exchange] Korea Eximbank returned non-list response for %s: %s", search_date, str(data)[:300])
-                        continue
-
-                    first = data[0] if data else {}
-                    if isinstance(first, dict):
-                        result_code = _row_get(first, "result", "")
-                        if str(result_code) in {"2", "3", "4"}:
-                            log.warning("[exchange] Korea Eximbank returned result=%s for %s", result_code, search_date)
-                            continue
-
-                    for row in data:
-                        if not isinstance(row, dict):
-                            continue
-                        cur_unit = str(_row_get(row, "cur_unit", "")).strip().upper()
-                        if cur_unit != "USD":
-                            continue
-
-                        # Kyungah nim noted the API uses SMBS/Korea Foreign Exchange Brokerage data.
-                        # Use KFTC_DEAL_BAS_R first because that is the Seoul Money Brokerage reference rate.
-                        rate_raw = _row_get(row, "kftc_deal_bas_r", "") or _row_get(row, "deal_bas_r", "")
-                        rate = _parse_rate(rate_raw)
-                        if rate is not None:
-                            return {
-                                "rate": rate,
-                                "source": f"Korea Eximbank API / SMBS KFTC ({search_date})",
-                            }
-
-                    log.warning("[exchange] Korea Eximbank returned data for %s but no valid USD row.", search_date)
-        except Exception as e:
-            log.warning("[exchange] Korea Eximbank API failed: %s", e)
-    else:
-        log.warning("[exchange] EXIMBANK_API_KEY is not set; trying SMBS fallback.")
-
-    # Fallback: SMBS page scrape
+    # Primary: SMBS
     try:
         async with _httpx.AsyncClient(timeout=10, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }) as client:
             r = await client.get("http://www.smbs.biz/ExRate/TodayExRate.jsp")
         if r.status_code == 200:
-            usd_pos = r.text.upper().find("USD")
-            search_area = r.text[usd_pos:usd_pos + 3000] if usd_pos >= 0 else r.text
-            matches = _re.findall(r"\d{1,3}(?:,\d{3})+\.\d{2}|\d{3,4}\.\d{2}", search_area)
-            for raw in matches:
-                rate = _parse_rate(raw)
-                if rate is not None:
-                    return {"rate": rate, "source": "SMBS fallback"}
-            log.warning("[exchange] SMBS page loaded but no valid USD/KRW rate was parsed.")
-        else:
-            log.warning("[exchange] SMBS returned status %s", r.status_code)
+            # Parse USD/KRW from the page
+            match = _re.search(r"USD.*?(\d{1,4}[.,]\d{2})", r.text, _re.DOTALL)
+            if match:
+                rate_str = match.group(1).replace(",", "")
+                rate = float(rate_str)
+                if 900 < rate < 2000:  # Sanity check
+                    return {"rate": rate, "source": "SMBS"}
     except Exception as e:
-        log.warning("[exchange] SMBS fallback failed: %s", e)
+        log.warning("[exchange] SMBS failed: %s", e)
+
+    # Fallback: ExchangeRate-API
+    try:
+        async with _httpx.AsyncClient(timeout=8) as client:
+            r = await client.get("https://open.er-api.com/v6/latest/USD")
+        if r.status_code == 200:
+            rate = r.json()["rates"]["KRW"]
+            return {"rate": rate, "source": "ExchangeRate-API"}
+    except Exception as e:
+        log.warning("[exchange] fallback failed: %s", e)
 
     return None
+
 
 async def cmd_fx(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user    = update.effective_user
