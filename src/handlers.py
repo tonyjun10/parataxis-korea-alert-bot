@@ -166,7 +166,6 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• /brief — BTC + ETH 대시보드 스크린샷\n"
             "• /daily — 데일리 스냅샷 (가격 + 주식 + 채굴)\n"
             "• /mining — 채굴 현황 보기\n"
-            "• /fx — USD/KRW 환율 확인\n"
             "• /t [텍스트] — 한국어↔영어 번역\n"
             "• /help — 이 도움말"
         )
@@ -179,7 +178,6 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "• /brief — BTC + ETH dashboard screenshots\n"
             "• /daily — Daily snapshot (prices + stocks + mining)\n"
             "• /mining — Get mining stats right now\n"
-            "• /fx — Check USD/KRW exchange rate\n"
             "• /t [text] — Translate Korean↔English\n"
             "• /help — This message"
         )
@@ -196,7 +194,6 @@ _SUB2_MAP = {
     "daily_brief":    [("brief", "brief")],
     "mining":         [("mining", "mining")],
     "daily_snapshot": [("daily", "daily")],
-    "exchange_rate":  [("exchange_rate", "fx_alert")],
 }
 
 def _get_sub2_state(chat_id: int) -> set:
@@ -212,8 +209,6 @@ def _get_sub2_state(chat_id: int) -> set:
     if ("daily", "daily") in company_cats:
         active.add("stock_prices")
         active.add("daily_snapshot")
-    if ("exchange_rate", "fx_alert") in company_cats:
-        active.add("exchange_rate")
     # Parataxis news: both parataxis and parataxiseth news subscribed
     if ("parataxis", "news") in company_cats and ("parataxiseth", "news") in company_cats:
         active.add("parataxis_news")
@@ -519,79 +514,77 @@ async def cmd_announcement(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def _fetch_usd_krw() -> dict | None:
     """
-    Fetch USD/KRW rate from SMBS (Seoul Money Brokerage Services).
-    Falls back to ExchangeRate-API if SMBS is unavailable.
+    Fetch USD/KRW rate.
+    Priority:
+      1. Korea Eximbank API (EXIMBANK_API_KEY env var)
+      2. SMBS scrape (http://www.smbs.biz/ExRate/TodayExRate.jsp)
+      3. ExchangeRate-API (final fallback)
     """
     import httpx as _httpx
     import re as _re
+    import os as _os
+    from datetime import datetime as _dt
 
-    # Primary: SMBS
+    def _sanity(rate: float) -> bool:
+        return 900 < rate < 2500
+
+    # ── 1. Korea Eximbank API ─────────────────────────────────────────────────
+    eximbank_key = _os.environ.get("EXIMBANK_API_KEY", "")
+    if eximbank_key:
+        try:
+            searchdate = _dt.now().strftime("%Y%m%d")
+            url = (
+                "https://oapi.koreaexim.go.kr/site/program/financial/exchangeJSON"
+                f"?authkey={eximbank_key}&searchdate={searchdate}&data=AP01"
+            )
+            async with _httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(url)
+            if r.status_code == 200:
+                rows = r.json()
+                for row in rows:
+                    if row.get("cur_unit", "").startswith("USD"):
+                        # Prefer 서울외국환중개 매매기준율, fallback to deal_bas_r
+                        raw = row.get("kftc_deal_bas_r") or row.get("deal_bas_r", "")
+                        rate = float(str(raw).replace(",", ""))
+                        if _sanity(rate):
+                            log.info("[exchange] Eximbank USD/KRW = %.2f", rate)
+                            return {"rate": rate, "source": "Korea Eximbank"}
+        except Exception as e:
+            log.warning("[exchange] Eximbank failed: %s", e)
+
+    # ── 2. SMBS scrape ────────────────────────────────────────────────────────
     try:
         async with _httpx.AsyncClient(timeout=10, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }) as client:
             r = await client.get("http://www.smbs.biz/ExRate/TodayExRate.jsp")
         if r.status_code == 200:
-            # Parse USD/KRW from the page
-            match = _re.search(r"USD.*?(\d{1,4}[.,]\d{2})", r.text, _re.DOTALL)
+            # Match full comma-formatted numbers like 1,499.80 near "USD"
+            match = _re.search(
+                r"USD[^0-9]{0,50}?(\d{1,4},\d{3}\.\d{2}|\d{3,4}\.\d{2})",
+                r.text, _re.DOTALL
+            )
             if match:
-                rate_str = match.group(1).replace(",", "")
-                rate = float(rate_str)
-                if 900 < rate < 2000:  # Sanity check
+                rate = float(match.group(1).replace(",", ""))
+                if _sanity(rate):
+                    log.info("[exchange] SMBS USD/KRW = %.2f", rate)
                     return {"rate": rate, "source": "SMBS"}
     except Exception as e:
         log.warning("[exchange] SMBS failed: %s", e)
 
-    # Fallback: ExchangeRate-API
+    # ── 3. ExchangeRate-API (final fallback) ──────────────────────────────────
     try:
         async with _httpx.AsyncClient(timeout=8) as client:
             r = await client.get("https://open.er-api.com/v6/latest/USD")
         if r.status_code == 200:
-            rate = r.json()["rates"]["KRW"]
-            return {"rate": rate, "source": "ExchangeRate-API"}
+            rate = float(r.json()["rates"]["KRW"])
+            if _sanity(rate):
+                log.info("[exchange] ExchangeRate-API USD/KRW = %.2f", rate)
+                return {"rate": rate, "source": "ExchangeRate-API"}
     except Exception as e:
-        log.warning("[exchange] fallback failed: %s", e)
+        log.warning("[exchange] ExchangeRate-API failed: %s", e)
 
     return None
-
-
-async def cmd_fx(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    user    = update.effective_user
-    chat_id = update.effective_chat.id
-    lang    = db.get_lang(chat_id)
-
-    if not _is_admin(user.id if user else None) and not db.is_approved(chat_id):
-        await update.message.reply_text("🔒 Access restricted.")
-        return
-
-    db.log_event("fx", user.id if user else None, user.username if user else None, chat_id)
-
-    loading = "⏳ 환율 불러오는 중…" if lang == "ko" else "⏳ Fetching exchange rate…"
-    loading_msg = await update.message.reply_text(loading)
-
-    result = await _fetch_usd_krw()
-    if result:
-        rate    = result["rate"]
-        source  = result["source"]
-        krw_per = round(1000 / rate, 4)
-        if lang == "ko":
-            text = (
-                f"💱 <b>USD/KRW 환율</b>\n\n"
-                f"• 1 USD = <b>₩{rate:,.2f}</b>\n"
-                f"• 1,000 KRW = <b>${krw_per:.4f}</b>\n\n"
-                f"<i>출처: {source}</i>"
-            )
-        else:
-            text = (
-                f"💱 <b>USD/KRW Exchange Rate</b>\n\n"
-                f"• 1 USD = <b>₩{rate:,.2f}</b>\n"
-                f"• 1,000 KRW = <b>${krw_per:.4f}</b>\n\n"
-                f"<i>Source: {source}</i>"
-            )
-    else:
-        text = "⚠️ 환율을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not fetch exchange rate."
-
-    await loading_msg.edit_text(text, parse_mode=ParseMode.HTML)
 
 async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query   = update.callback_query
@@ -906,12 +899,6 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 db.unsubscribe(chat_id, company="daily", category="daily")
             else:
                 db.subscribe(chat_id, "daily", "daily")
-
-        elif key == "exchange_rate":
-            if "exchange_rate" in state:
-                db.unsubscribe(chat_id, company="exchange_rate", category="fx_alert")
-            else:
-                db.subscribe(chat_id, "exchange_rate", "fx_alert")
 
         elif key == "parataxis_news":
             # Parataxis news feeds = parataxis + parataxiseth news + disclosures
