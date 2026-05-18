@@ -509,6 +509,46 @@ async def cmd_announcement(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── Callback dispatcher ───────────────────────────────────────────────────────
 
+
+# ── Exchange Rate (SMBS) ───────────────────────────────────────────────────────
+
+async def _fetch_usd_krw() -> dict | None:
+    """
+    Fetch USD/KRW rate from SMBS (Seoul Money Brokerage Services).
+    Falls back to ExchangeRate-API if SMBS is unavailable.
+    """
+    import httpx as _httpx
+    import re as _re
+
+    # Primary: SMBS
+    try:
+        async with _httpx.AsyncClient(timeout=10, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }) as client:
+            r = await client.get("http://www.smbs.biz/ExRate/TodayExRate.jsp")
+        if r.status_code == 200:
+            # Parse USD/KRW from the page
+            match = _re.search(r"USD.*?(\d{1,4}[.,]\d{2})", r.text, _re.DOTALL)
+            if match:
+                rate_str = match.group(1).replace(",", "")
+                rate = float(rate_str)
+                if 900 < rate < 2000:  # Sanity check
+                    return {"rate": rate, "source": "SMBS"}
+    except Exception as e:
+        log.warning("[exchange] SMBS failed: %s", e)
+
+    # Fallback: ExchangeRate-API
+    try:
+        async with _httpx.AsyncClient(timeout=8) as client:
+            r = await client.get("https://open.er-api.com/v6/latest/USD")
+        if r.status_code == 200:
+            rate = r.json()["rates"]["KRW"]
+            return {"rate": rate, "source": "ExchangeRate-API"}
+    except Exception as e:
+        log.warning("[exchange] fallback failed: %s", e)
+
+    return None
+
 async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query   = update.callback_query
     await query.answer()
@@ -745,6 +785,37 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             msg = "<b>📋 Logs & Records</b>\n\n📰 <a href='" + wl + "'>News & Disclosure Watchlist</a>\n💬 <a href='" + kk + "'>Kakao Meeting Log</a>"
         nav = kb_after_result(lang, "parataxis")
         await query.edit_message_text(msg, reply_markup=nav, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+    elif data == "menu:exchange_rate":
+        db.log_event("click", user.id, user.username, chat_id, data)
+        loading = "⏳ 환율 불러오는 중…" if lang == "ko" else "⏳ Fetching exchange rate…"
+        await query.edit_message_text(loading)
+        result = await _fetch_usd_krw()
+        if result:
+            rate     = result["rate"]
+            source   = result["source"]
+            krw_per  = round(1000 / rate, 4)
+            if lang == "ko":
+                text = (
+                    f"💱 <b>USD/KRW 환율</b>\n\n"
+                    f"• 1 USD = <b>₩{rate:,.2f}</b>\n"
+                    f"• 1,000 KRW = <b>${krw_per:.4f}</b>\n\n"
+                    f"<i>출처: {source}</i>"
+                )
+            else:
+                text = (
+                    f"💱 <b>USD/KRW Exchange Rate</b>\n\n"
+                    f"• 1 USD = <b>₩{rate:,.2f}</b>\n"
+                    f"• 1,000 KRW = <b>${krw_per:.4f}</b>\n\n"
+                    f"<i>Source: {source}</i>"
+                )
+        else:
+            text = "⚠️ 환율을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not fetch exchange rate."
+        nav = InlineKeyboardMarkup([[
+            InlineKeyboardButton("⬅️ 뒤로" if lang == "ko" else "⬅️ Back", callback_data="nav:main"),
+            InlineKeyboardButton("🏠 Home", callback_data="nav:home"),
+        ]])
+        await query.edit_message_text(text, reply_markup=nav, parse_mode=ParseMode.HTML)
 
     elif data == "menu:translate_help":
         nav = kb_after_result(lang, "parataxis")
