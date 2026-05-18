@@ -519,38 +519,81 @@ async def cmd_announcement(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def _fetch_usd_krw() -> dict | None:
     """
-    Fetch USD/KRW rate from SMBS (Seoul Money Brokerage Services).
-    Falls back to ExchangeRate-API if SMBS is unavailable.
+    Fetch USD/KRW rate from Korea Eximbank public exchange-rate API.
+    Falls back to the existing SMBS page scrape only if the API is unavailable.
     """
-    import httpx as _httpx
+    import os as _os
     import re as _re
+    from datetime import datetime as _datetime, timedelta as _timedelta
+    from zoneinfo import ZoneInfo as _ZoneInfo
 
-    # Primary: SMBS
+    import httpx as _httpx
+
+    # Primary: Korea Eximbank / public data API
+    authkey = (
+        _os.environ.get("EXIMBANK_API_KEY")
+        or _os.environ.get("KOREAEXIM_API_KEY")
+        or _os.environ.get("KOREA_EXIMBANK_API_KEY")
+        or ""
+    ).strip()
+
+    if authkey:
+        try:
+            base_url = "https://oapi.koreaexim.go.kr/site/program/financial/exchangeJSON"
+            today = _datetime.now(_ZoneInfo("Asia/Seoul")).date()
+
+            async with _httpx.AsyncClient(timeout=10) as client:
+                for days_back in range(0, 10):
+                    search_date = (today - _timedelta(days=days_back)).strftime("%Y%m%d")
+                    r = await client.get(
+                        base_url,
+                        params={
+                            "authkey": authkey,
+                            "searchdate": search_date,
+                            "data": "AP01",
+                        },
+                    )
+                    r.raise_for_status()
+                    data = r.json()
+
+                    if not isinstance(data, list):
+                        continue
+
+                    for row in data:
+                        if not isinstance(row, dict):
+                            continue
+                        cur_unit = str(row.get("cur_unit", "")).strip().upper()
+                        if cur_unit != "USD":
+                            continue
+
+                        rate_raw = str(row.get("deal_bas_r", "")).strip()
+                        rate_str = rate_raw.replace(",", "")
+                        rate = float(rate_str)
+                        if 900 < rate < 2000:
+                            return {
+                                "rate": rate,
+                                "source": f"Korea Eximbank API ({search_date})",
+                            }
+        except Exception as e:
+            log.warning("[exchange] Korea Eximbank API failed: %s", e)
+    else:
+        log.warning("[exchange] EXIMBANK_API_KEY is not set.")
+
+    # Fallback: SMBS page scrape
     try:
         async with _httpx.AsyncClient(timeout=10, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }) as client:
             r = await client.get("http://www.smbs.biz/ExRate/TodayExRate.jsp")
         if r.status_code == 200:
-            # Parse USD/KRW from the page
             match = _re.search(r"USD.*?(\d{1,4}[.,]\d{2})", r.text, _re.DOTALL)
             if match:
                 rate_str = match.group(1).replace(",", "")
                 rate = float(rate_str)
-                if 900 < rate < 2000:  # Sanity check
-                    return {"rate": rate, "source": "SMBS"}
+                if 900 < rate < 2000:
+                    return {"rate": rate, "source": "SMBS fallback"}
     except Exception as e:
-        log.warning("[exchange] SMBS failed: %s", e)
-
-    # Fallback: ExchangeRate-API
-    try:
-        async with _httpx.AsyncClient(timeout=8) as client:
-            r = await client.get("https://open.er-api.com/v6/latest/USD")
-        if r.status_code == 200:
-            rate = r.json()["rates"]["KRW"]
-            return {"rate": rate, "source": "ExchangeRate-API"}
-    except Exception as e:
-        log.warning("[exchange] fallback failed: %s", e)
+        log.warning("[exchange] SMBS fallback failed: %s", e)
 
     return None
 
