@@ -552,6 +552,45 @@ async def _fetch_usd_krw() -> dict | None:
 
     return None
 
+
+async def cmd_fx(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    user    = update.effective_user
+    chat_id = update.effective_chat.id
+    lang    = db.get_lang(chat_id)
+
+    if not _is_admin(user.id if user else None) and not db.is_approved(chat_id):
+        await update.message.reply_text("🔒 Access restricted.")
+        return
+
+    db.log_event("fx", user.id if user else None, user.username if user else None, chat_id)
+
+    loading = "⏳ 환율 불러오는 중…" if lang == "ko" else "⏳ Fetching exchange rate…"
+    await update.message.reply_text(loading)
+
+    result = await _fetch_usd_krw()
+    if result:
+        rate    = result["rate"]
+        source  = result["source"]
+        krw_per = round(1000 / rate, 4)
+        if lang == "ko":
+            text = (
+                f"💱 <b>USD/KRW 환율</b>\n\n"
+                f"• 1 USD = <b>₩{rate:,2f}</b>\n"
+                f"• 1,000 KRW = <b>${krw_per:.4f}</b>\n\n"
+                f"<i>출처: {source}</i>"
+            )
+        else:
+            text = (
+                f"💱 <b>USD/KRW Exchange Rate</b>\n\n"
+                f"• 1 USD = <b>₩{rate:,2f}</b>\n"
+                f"• 1,000 KRW = <b>${krw_per:.4f}</b>\n\n"
+                f"<i>Source: {source}</i>"
+            )
+    else:
+        text = "⚠️ 환율을 가져오지 못했습니다." if lang == "ko" else "⚠️ Could not fetch exchange rate."
+
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
 async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query   = update.callback_query
     await query.answer()
