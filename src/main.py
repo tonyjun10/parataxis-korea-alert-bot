@@ -45,6 +45,7 @@ from handlers import (
     cmd_kakaoexport,
     cmd_audit,
     cmd_brief,
+    cmd_fx,
     cmd_subscribe,
     cmd_daily,
     cmd_mining,
@@ -94,6 +95,7 @@ def main():
     app.add_handler(CommandHandler("audit",   cmd_audit))
     app.add_handler(CommandHandler("users",   cmd_users))
     app.add_handler(CommandHandler("brief",   cmd_brief))
+    app.add_handler(CommandHandler("fx",      cmd_fx))
     app.add_handler(CommandHandler("mining",  cmd_mining))
     app.add_handler(CommandHandler("daily",   cmd_daily))
     app.add_handler(CommandHandler("announcement", cmd_announcement))
