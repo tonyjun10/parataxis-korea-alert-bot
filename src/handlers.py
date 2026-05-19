@@ -215,6 +215,9 @@ def _get_sub2_state(chat_id: int) -> set:
     # Competitor news: bitmax + bitplanet news subscribed
     if ("bitmax", "news") in company_cats and ("bitplanet", "news") in company_cats:
         active.add("competitor_news")
+    # FX rate alerts
+    if ("exchange_rate", "fx_alert") in company_cats:
+        active.add("exchange_rate")
     return active
 
 
@@ -966,6 +969,12 @@ async def callback_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 db.subscribe(chat_id, "microstrategy", "news")
                 if is_first:
                     ctx.application.create_task(_seed_dedup_tables())
+
+        elif key == "exchange_rate":
+            if "exchange_rate" in state:
+                db.unsubscribe(chat_id, company="exchange_rate", category="fx_alert")
+            else:
+                db.subscribe(chat_id, "exchange_rate", "fx_alert")
 
         # Refresh the menu with updated state
         new_state = _get_sub2_state(chat_id)
