@@ -455,6 +455,30 @@ async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
+
+# ── /testdigest (admin only) ──────────────────────────────────────────────────
+
+async def cmd_testdigest(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Trigger the daily email digest immediately — admin only."""
+    user = update.effective_user
+    if not _is_admin(user.id if user else None):
+        await update.message.reply_text("Command not recognized.")
+        return
+
+    sent = await update.message.reply_text("⏳ Sending test digest email...")
+    try:
+        from email_digest import send_digest
+        import sheets as _sheets
+        from sheets import WATCHLIST_SHEET_ID
+        client = _sheets._get_gspread_client()
+        result = await asyncio.to_thread(send_digest, client, WATCHLIST_SHEET_ID)
+        if result:
+            await sent.edit_text("✅ Test digest sent! Check your inbox.")
+        else:
+            await sent.edit_text("⚠️ Failed to send — check Railway logs for details.")
+    except Exception as e:
+        await sent.edit_text(f"⚠️ Error: {e}")
+
 # ── /subs (admin only) ────────────────────────────────────────────────────────
 
 async def cmd_subs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
