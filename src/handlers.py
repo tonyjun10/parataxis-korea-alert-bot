@@ -460,6 +460,7 @@ async def cmd_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_testdigest(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Trigger the daily email digest immediately — admin only."""
+    import asyncio as _asyncio
     user = update.effective_user
     if not _is_admin(user.id if user else None):
         await update.message.reply_text("Command not recognized.")
@@ -471,7 +472,7 @@ async def cmd_testdigest(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         import sheets as _sheets
         from sheets import WATCHLIST_SHEET_ID
         client = _sheets._get_gspread_client()
-        result = await asyncio.to_thread(send_digest, client, WATCHLIST_SHEET_ID)
+        result = await _asyncio.to_thread(send_digest, client, WATCHLIST_SHEET_ID)
         if result:
             await sent.edit_text("✅ Test digest sent! Check your inbox.")
         else:
