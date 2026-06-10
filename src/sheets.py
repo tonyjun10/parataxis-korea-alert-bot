@@ -24,6 +24,7 @@ _WATCHLIST_TABS = {
     "bitplanet":     "Bitplanet",
     "parataxiseth":  "Parataxis Ethereum",
     "microstrategy": "Strategy",
+    "market_news":   "Market News",
 }
 SHEET_NAME     = "Parataxis Kakao Log"
 SHEET_URL      = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}"
