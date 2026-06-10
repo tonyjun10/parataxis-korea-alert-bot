@@ -25,12 +25,6 @@ SEOUL = ZoneInfo("Asia/Seoul")
 
 # ── Recipients ────────────────────────────────────────────────────────────────
 ALL_RECIPIENTS = [
-    "ed@parataxis.io",
-    "andrew@parataxis.io",
-    "michael@parataxiseth.co.kr",
-    "kyungah.kim@parataxis.co.kr",
-    "david@parataxis.co.kr",
-    "jason@parataxis.co.kr",
     "tony.jun@parataxis.co.kr",
 ]
 
