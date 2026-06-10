@@ -40,12 +40,12 @@ from handlers import (
     callback_handler,
     cmd_announcement,
     cmd_subs,
+    cmd_testdigest,
     cmd_kakao,
     cmd_t,
     cmd_kakaoexport,
     cmd_audit,
     cmd_brief,
-    cmd_fx,
     cmd_subscribe,
     cmd_daily,
     cmd_mining,
@@ -95,11 +95,11 @@ def main():
     app.add_handler(CommandHandler("audit",   cmd_audit))
     app.add_handler(CommandHandler("users",   cmd_users))
     app.add_handler(CommandHandler("brief",   cmd_brief))
-    app.add_handler(CommandHandler("fx",      cmd_fx))
     app.add_handler(CommandHandler("mining",  cmd_mining))
     app.add_handler(CommandHandler("daily",   cmd_daily))
     app.add_handler(CommandHandler("announcement", cmd_announcement))
     app.add_handler(CommandHandler("subs",         cmd_subs))
+    app.add_handler(CommandHandler("testdigest",   cmd_testdigest))
     app.add_handler(CommandHandler("kakao",        cmd_kakao))
     app.add_handler(CommandHandler("kakaoexport",  cmd_kakaoexport))
     app.add_handler(CommandHandler("t",            cmd_t))
