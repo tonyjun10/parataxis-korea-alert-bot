@@ -32,6 +32,14 @@ COMPANY_QUERIES: dict[str, list[str]] = {
     "bitplanet":     ["비트플래닛", "Bitplanet Korea"],
     "parataxiseth":  ["파라택시스이더리움", "파라택시스 이더리움", "Parataxis Ethereum", "신시웨이", "Sinsiway", "290560 KOSDAQ"],
     "microstrategy": ["MicroStrategy", "MSTR bitcoin", "Strategy MicroStrategy"],
+    "market_news":   [
+        "Bitcoin price", "Ethereum price",
+        "crypto regulation", "cryptocurrency ETF",
+        "Bitcoin mining", "digital asset treasury",
+        "Solana SOL", "XRP Ripple",
+        "가상자산 규제", "디지털자산", "비트코인 ETF",
+        "암호화폐 규제", "가상자산 ETF",
+    ],
 }
 
 
