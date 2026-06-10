@@ -24,22 +24,33 @@ log = logging.getLogger(__name__)
 SEOUL = ZoneInfo("Asia/Seoul")
 
 # ── Recipients ────────────────────────────────────────────────────────────────
+# Add exec emails here when ready to go live (EMAIL_TEST_MODE=0)
 ALL_RECIPIENTS = [
     "tony.jun@parataxis.co.kr",
 ]
 
 # ── Fetch news from sheets ────────────────────────────────────────────────────
 
-def _fetch_sheet_news(sheets_client, spreadsheet_id: str, tab_name: str, max_rows: int = 8) -> list[dict]:
-    """Fetch recent news rows from a Google Sheet tab."""
+def _fetch_sheet_news(sheets_client, spreadsheet_id: str, tab_name: str, max_rows: int = 50) -> list[dict]:
+    """
+    Fetch approved news rows from a Google Sheet tab.
+    Only returns rows where column E (Send) = 'YES'.
+    After collecting, clears the YES flags so articles aren't re-sent tomorrow.
+    """
     try:
         sheet = sheets_client.open_by_key(spreadsheet_id).worksheet(tab_name)
         rows  = sheet.get_all_values()
         if len(rows) <= 1:
             return []
-        data_rows = rows[1:][-max_rows:]
+
         results = []
-        for row in reversed(data_rows):
+        rows_to_clear = []  # (row_index, ) for clearing YES after send
+
+        for i, row in enumerate(rows[1:], start=2):  # start=2 because row 1 is header
+            # Column E is index 4
+            approved = row[4].strip().upper() if len(row) >= 5 else ""
+            if approved != "YES":
+                continue
             if len(row) >= 4 and row[2].strip():
                 results.append({
                     "timestamp": row[0],
@@ -47,7 +58,15 @@ def _fetch_sheet_news(sheets_client, spreadsheet_id: str, tab_name: str, max_row
                     "title":     row[2],
                     "url":       row[3],
                 })
+                rows_to_clear.append(i)
+
+        # Clear YES flags after collecting so articles aren't re-sent
+        for row_idx in rows_to_clear:
+            sheet.update_cell(row_idx, 5, "")  # Column 5 = E
+
+        log.info("[email] Tab '%s': %d approved articles, cleared flags.", tab_name, len(results))
         return results
+
     except Exception as e:
         log.warning("[email] Failed to fetch tab '%s': %s", tab_name, e)
         return []
