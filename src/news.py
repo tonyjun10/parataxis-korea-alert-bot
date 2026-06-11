@@ -33,12 +33,17 @@ COMPANY_QUERIES: dict[str, list[str]] = {
     "parataxiseth":  ["파라택시스이더리움", "파라택시스 이더리움", "Parataxis Ethereum", "신시웨이", "Sinsiway", "290560 KOSDAQ"],
     "microstrategy": ["MicroStrategy", "MSTR bitcoin", "Strategy MicroStrategy"],
     "market_news":   [
-        "Bitcoin price", "Ethereum price",
-        "crypto regulation", "cryptocurrency ETF",
-        "Bitcoin mining", "digital asset treasury",
-        "Solana SOL", "XRP Ripple",
-        "가상자산 규제", "디지털자산", "비트코인 ETF",
-        "암호화폐 규제", "가상자산 ETF",
+        # Korean institutional/regulatory news
+        "비트코인 기관", "가상자산 규제", "디지털자산법",
+        "비트코인 ETF", "가상자산 ETF", "코인 입법",
+        "스테이블코인 규제", "가상자산 과세",
+        "비트코인 재무", "메타플래닛 비트코인",
+        # English institutional/market news
+        "Bitcoin treasury company", "Bitcoin ETF institutional",
+        "crypto regulation 2026", "stablecoin legislation",
+        "digital asset law Korea", "Bitcoin mining company",
+        "MicroStrategy Bitcoin", "Metaplanet Bitcoin",
+        "Ethereum ETF", "crypto tax",
     ],
 }
 
