@@ -26,8 +26,9 @@ SEOUL = ZoneInfo("Asia/Seoul")
 # ── Recipients ────────────────────────────────────────────────────────────────
 # Add exec emails here when ready to go live (EMAIL_TEST_MODE=0)
 ALL_RECIPIENTS = [
-    "tony.jun@parataxis.co.kr",
     "lunakim13@gmail.com",
+    "balloonpoppingboy@gmail.com",
+    "tonyjun1010@gmail.com",
 ]
 
 # ── Fetch news from sheets ────────────────────────────────────────────────────
