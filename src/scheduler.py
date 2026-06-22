@@ -36,7 +36,7 @@ SEOUL = ZoneInfo("Asia/Seoul")
 NEWS_MAX_AGE_DAYS = 7   # do not alert on news older than this
 
 _DART_COMPANIES = ["parataxis", "parataxiseth", "bitmax", "bitplanet"]
-_NEWS_COMPANIES = ["parataxis", "parataxiseth", "bitmax", "bitplanet", "microstrategy", "market_news"]
+_NEWS_COMPANIES = ["parataxis", "parataxiseth", "bitmax", "bitplanet", "microstrategy", "bitmine", "market_news"]
 
 _COMPANY_LABEL = {
     "parataxis":     {"en": "Parataxis Korea", "ko": "파라택시스 코리아"},
