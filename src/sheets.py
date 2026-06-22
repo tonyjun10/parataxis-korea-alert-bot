@@ -24,6 +24,7 @@ _WATCHLIST_TABS = {
     "bitplanet":     "Bitplanet",
     "parataxiseth":  "Parataxis Ethereum",
     "microstrategy": "Strategy",
+    "bitmine":       "Bitmine",
     "market_news":   "Market News",
 }
 SHEET_NAME     = "Parataxis Kakao Log"
