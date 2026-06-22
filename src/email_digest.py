@@ -28,7 +28,6 @@ SEOUL = ZoneInfo("Asia/Seoul")
 ALL_RECIPIENTS = [
     "lunakim13@gmail.com",
     "balloonpoppingboy@gmail.com",
-    "tonyjun1010@gmail.com",
 ]
 
 # ── Fetch news from sheets ────────────────────────────────────────────────────
@@ -113,7 +112,7 @@ def _section_block(section_title: str, subsections: list[tuple[str, list[dict]]]
 
 def _build_html(date_str: str,
                 pk_news: list, pe_news: list,
-                st_news: list, bm_news: list, bp_news: list,
+                st_news: list, bm_news: list, bp_news: list, bn_news: list,
                 mkt_news: list) -> str:
 
     parataxis_block  = _section_block("Parataxis News", [
@@ -124,6 +123,7 @@ def _build_html(date_str: str,
         ("Strategy",  st_news),
         ("Bitmax",    bm_news),
         ("Bitplanet", bp_news),
+        ("Bitmine",   bn_news),
     ])
     market_block     = _section_block("Market News", [
         ("Market News", mkt_news),
@@ -205,9 +205,10 @@ def send_digest(sheets_client, watchlist_sheet_id: str) -> bool:
     st_news  = _fetch_sheet_news(sheets_client, watchlist_sheet_id, "Strategy",           max_rows=5)
     bm_news  = _fetch_sheet_news(sheets_client, watchlist_sheet_id, "Bitmax",             max_rows=5)
     bp_news  = _fetch_sheet_news(sheets_client, watchlist_sheet_id, "Bitplanet",          max_rows=5)
+    bn_news  = _fetch_sheet_news(sheets_client, watchlist_sheet_id, "Bitmine",            max_rows=5)
     mkt_news = _fetch_sheet_news(sheets_client, watchlist_sheet_id, "Market News",        max_rows=15)
 
-    html_body = _build_html(date_str, pk_news, pe_news, st_news, bm_news, bp_news, mkt_news)
+    html_body = _build_html(date_str, pk_news, pe_news, st_news, bm_news, bp_news, bn_news, mkt_news)
     subject   = f"[Parataxis] Daily News Report — {now.strftime('%B %-d, %Y')}"
 
     # Test mode: send only to sender
