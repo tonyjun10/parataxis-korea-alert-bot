@@ -105,13 +105,14 @@ def register_jobs(app: Application, interval_minutes: int = 10):
     )
     log.info("Mining job registered — every %d min.", interval_minutes)
 
-    # Daily email digest — 10:05 KST (5 min after brief so news is fresh)
+    # Email digest — 10:05 KST, weekdays only (Mon-Fri)
     app.job_queue.run_daily(
         _email_job,
         time=dt_time(hour=10, minute=5, second=0, tzinfo=SEOUL),
+        days=(0, 1, 2, 3, 4),  # Monday=0 ... Friday=4 (no weekends)
         name="email_digest",
     )
-    log.info("Email digest job registered — 10:05 KST.")
+    log.info("Email digest job registered — 10:05 KST (weekdays only).")
 
 
 async def _monitor_job(context) -> None:
