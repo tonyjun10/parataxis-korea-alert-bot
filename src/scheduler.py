@@ -264,9 +264,20 @@ async def _check_news(bot: Bot, company: str) -> int:
     new_items.sort(key=_news_key, reverse=True)
     best = new_items[0]
 
-    # Always log to watchlist sheet regardless of subscribed chats
-    asyncio.create_task(_sheets.append_watchlist_entry(
-        company, "News", best.get("title", ""), best.get("url", "")))
+    # ── Sheet logging ──
+    # For market_news, log ALL new articles (KPR-style volume).
+    # For company news, log only the single best/newest article.
+    if company == "market_news":
+        for it in new_items:
+            db.mark_news_seen(it["url"], company)
+            asyncio.create_task(_sheets.append_watchlist_entry(
+                company, "News", it.get("title", ""), it.get("url", "")))
+        log.info("[news/market_news] logged %d articles to sheet", len(new_items))
+        return 0  # market_news is sheet+email only, no Telegram alerts
+    else:
+        # Always log to watchlist sheet regardless of subscribed chats
+        asyncio.create_task(_sheets.append_watchlist_entry(
+            company, "News", best.get("title", ""), best.get("url", "")))
 
     if not chats:
         return 0
