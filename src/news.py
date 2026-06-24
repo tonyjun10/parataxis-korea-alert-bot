@@ -227,23 +227,37 @@ def _fetch_gdelt_sync(company_key: str, limit: int) -> list[dict]:
         return []
 
 
-# ── Generic pipeline (bitmax / bitplanet / microstrategy) ─────────────────────
+# ── Generic pipeline (bitmax / bitplanet / microstrategy / market_news) ────────
 
-def _get_news_sync(company_key: str, limit: int = 5) -> list[dict]:
+def _get_news_sync(company_key: str, limit: int = 5, max_age_days: int | None = None) -> list[dict]:
     queries   = COMPANY_QUERIES.get(company_key.lower(), [company_key])
     results   = []
     seen_urls: set[str] = set()
 
+    cutoff = None
+    if max_age_days is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+
     for q in queries:
         for item in _fetch_rss_sync(q, limit):
             url = item.get("url", "")
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                results.append(_strip_dt(item))
+            if not url or url in seen_urls:
+                continue
+            # Age filter: drop items older than cutoff.
+            # Items with an unparseable date (_dt is None) are dropped when a
+            # cutoff is set, since we can't verify they're recent.
+            if cutoff is not None:
+                dt = item.get("_dt")
+                if dt is None or dt < cutoff:
+                    continue
+            seen_urls.add(url)
+            results.append(_strip_dt(item))
         if len(results) >= limit:
             break
 
-    if len(results) < limit:
+    # GDELT fallback only when we still need more AND no strict age filter
+    # (GDELT seendate is less reliable, so skip it for age-filtered queries)
+    if len(results) < limit and cutoff is None:
         for item in _fetch_gdelt_sync(company_key, limit):
             url = item.get("url", "")
             if url and url not in seen_urls:
@@ -297,4 +311,6 @@ async def get_news(company_key: str, limit: int = 5, no_age_limit: bool = False)
         return await asyncio.to_thread(_get_parataxis_news_sync, limit, no_age_limit)
     if key == "parataxiseth":
         return await asyncio.to_thread(_get_parataxiseth_news_sync, limit, no_age_limit)
-    return await asyncio.to_thread(_get_news_sync, key, limit)
+    # market_news gets a strict 7-day age filter to avoid stale articles
+    max_age = None if no_age_limit else (7 if key == "market_news" else None)
+    return await asyncio.to_thread(_get_news_sync, key, limit, max_age)
