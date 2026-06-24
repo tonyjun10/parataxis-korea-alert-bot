@@ -28,6 +28,7 @@ SEOUL = ZoneInfo("Asia/Seoul")
 ALL_RECIPIENTS = [
     "lunakim13@gmail.com",
     "balloonpoppingboy@gmail.com",
+    "tonyjun1010@gmail.com",
 ]
 
 # ── Fetch news from sheets ────────────────────────────────────────────────────
