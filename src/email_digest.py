@@ -1,15 +1,17 @@
 """
-email_digest.py — Daily Parataxis News Digest via SendGrid.
+email_digest.py — Daily Parataxis News Digest via Microsoft Graph API.
 
 Pulls latest news from the Google Sheets watchlist tabs and sends a
-formatted HTML email to the recipient list.
+formatted HTML email to the recipient list from the company Outlook account.
 
 Required env vars:
-  SENDGRID_API_KEY  — SendGrid API key
-  EMAIL_SENDER      — sender address (e.g. tony.jun@parataxis.co.kr)
+  AZURE_TENANT_ID      — Directory (tenant) ID from Azure app registration
+  AZURE_CLIENT_ID      — Application (client) ID from Azure app registration
+  AZURE_CLIENT_SECRET  — Client secret value from Azure app registration
+  EMAIL_SENDER         — sender address (tony.jun@parataxis.co.kr)
 
 Optional env vars:
-  EMAIL_TEST_MODE   — if set to "1", sends only to EMAIL_SENDER (testing)
+  EMAIL_TEST_MODE      — if set to "1", sends only to EMAIL_SENDER (testing)
 """
 
 import logging
@@ -24,11 +26,12 @@ log = logging.getLogger(__name__)
 SEOUL = ZoneInfo("Asia/Seoul")
 
 # ── Recipients ────────────────────────────────────────────────────────────────
-# Add exec emails here when ready to go live (EMAIL_TEST_MODE=0)
+# Full distribution list (used when EMAIL_TEST_MODE=0)
 ALL_RECIPIENTS = [
-    "lunakim13@gmail.com",
-    "balloonpoppingboy@gmail.com",
-    "tonyjun1010@gmail.com",
+    "tony.jun@parataxis.co.kr",
+    "kyungah.kim@parataxis.co.kr",
+    "david@parataxis.co.kr",
+    "sihyun.kim@parataxis.co.kr",
 ]
 
 # ── Fetch news from sheets ────────────────────────────────────────────────────
@@ -185,17 +188,40 @@ def _build_html(date_str: str,
 </html>"""
 
 
-# ── Send via SendGrid ─────────────────────────────────────────────────────────
+# ── Microsoft Graph API ───────────────────────────────────────────────────────
+
+def _get_graph_token() -> str | None:
+    """Get Microsoft Graph access token via client credentials flow."""
+    tenant_id     = os.environ.get("AZURE_TENANT_ID", "")
+    client_id     = os.environ.get("AZURE_CLIENT_ID", "")
+    client_secret = os.environ.get("AZURE_CLIENT_SECRET", "")
+
+    if not all([tenant_id, client_id, client_secret]):
+        log.warning("[email] Azure credentials not set — skipping")
+        return None
+
+    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    data = {
+        "grant_type":    "client_credentials",
+        "client_id":     client_id,
+        "client_secret": client_secret,
+        "scope":         "https://graph.microsoft.com/.default",
+    }
+    try:
+        r = httpx.post(url, data=data, timeout=15)
+        r.raise_for_status()
+        return r.json()["access_token"]
+    except Exception as e:
+        log.error("[email] Failed to get Graph token: %s", e)
+        return None
+
+
+# ── Send via Microsoft Graph ──────────────────────────────────────────────────
 
 def send_digest(sheets_client, watchlist_sheet_id: str) -> bool:
-    """Build and send the daily digest. Returns True on success."""
-    api_key   = os.environ.get("SENDGRID_API_KEY", "")
+    """Build and send the daily digest via Microsoft Graph. Returns True on success."""
     sender    = os.environ.get("EMAIL_SENDER", "tony.jun@parataxis.co.kr")
     test_mode = os.environ.get("EMAIL_TEST_MODE", "1") == "1"
-
-    if not api_key:
-        log.warning("[email] SENDGRID_API_KEY not set — skipping")
-        return False
 
     now      = datetime.now(SEOUL)
     date_str = now.strftime("%Y. %-m. %-d")
@@ -216,28 +242,39 @@ def send_digest(sheets_client, watchlist_sheet_id: str) -> bool:
     recipients = [sender] if test_mode else ALL_RECIPIENTS
     log.info("[email] Sending digest to %d recipient(s) (test_mode=%s)", len(recipients), test_mode)
 
+    token = _get_graph_token()
+    if not token:
+        return False
+
     payload = {
-        "personalizations": [{"to": [{"email": r} for r in recipients]}],
-        "from":    {"email": sender, "name": "Parataxis Daily Digest"},
-        "subject": subject,
-        "content": [{"type": "text/html", "value": html_body}],
+        "message": {
+            "subject": subject,
+            "body": {
+                "contentType": "HTML",
+                "content": html_body,
+            },
+            "toRecipients": [
+                {"emailAddress": {"address": r}} for r in recipients
+            ],
+        },
+        "saveToSentItems": True,
     }
 
     try:
         r = httpx.post(
-            "https://api.sendgrid.com/v3/mail/send",
+            f"https://graph.microsoft.com/v1.0/users/{sender}/sendMail",
             headers={
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": f"Bearer {token}",
                 "Content-Type":  "application/json",
             },
             content=json.dumps(payload),
             timeout=30,
         )
         if r.status_code == 202:
-            log.info("[email] Digest sent successfully.")
+            log.info("[email] Digest sent successfully via Graph.")
             return True
         else:
-            log.error("[email] SendGrid error: %d %s", r.status_code, r.text[:300])
+            log.error("[email] Graph send error: %d %s", r.status_code, r.text[:300])
             return False
     except Exception as e:
         log.error("[email] Send exception: %s", e)
