@@ -38,6 +38,27 @@ NEWS_MAX_AGE_DAYS = 7   # do not alert on news older than this
 _DART_COMPANIES = ["parataxis", "parataxiseth", "bitmax", "bitplanet"]
 _NEWS_COMPANIES = ["parataxis", "parataxiseth", "bitmax", "bitplanet", "microstrategy", "bitmine", "market_news"]
 
+# ── Market news noise filter ──────────────────────────────────────────────────
+# Skip price-movement / AI-generated roundup articles that aren't substantive.
+# Applied only to market_news before logging to the sheet.
+_MARKET_NEWS_BLACKLIST = [
+    # Korean price-movement / speculation noise
+    "시세", "급등", "급락", "떡상", "떡락", "폭등", "폭락",
+    "오를까", "내릴까", "전망", "갈까", "찍나", "터치",
+    "마감 시황", "모닝콜", "브리핑", "코인 시황", "오전 시황", "오후 시황",
+    "강세", "약세", "반등", "조정", "매수 기회", "저점", "고점",
+    # English price-movement noise
+    "price prediction", "price analysis", "could hit", "rally",
+    "surges", "plunges", "soars", "crashes", "how to buy",
+    "how to start", "beginner", "guide to", "what is",
+]
+
+
+def _is_market_noise(title: str) -> bool:
+    """Return True if a market_news title matches the noise blacklist."""
+    t = title.lower()
+    return any(bad.lower() in t for bad in _MARKET_NEWS_BLACKLIST)
+
 _COMPANY_LABEL = {
     "parataxis":     {"en": "Parataxis Korea", "ko": "파라택시스 코리아"},
     "bitmax":        {"en": "Bitmax",          "ko": "비트맥스"},
@@ -268,11 +289,19 @@ async def _check_news(bot: Bot, company: str) -> int:
     # For market_news, log ALL new articles (KPR-style volume).
     # For company news, log only the single best/newest article.
     if company == "market_news":
+        logged = 0
+        skipped_noise = 0
         for it in new_items:
+            title = it.get("title", "")
+            if _is_market_noise(title):
+                skipped_noise += 1
+                db.mark_news_seen(it["url"], company)  # mark seen so it doesn't resurface
+                continue
             db.mark_news_seen(it["url"], company)
             asyncio.create_task(_sheets.append_watchlist_entry(
-                company, "News", it.get("title", ""), it.get("url", "")))
-        log.info("[news/market_news] logged %d articles to sheet", len(new_items))
+                company, "News", title, it.get("url", "")))
+            logged += 1
+        log.info("[news/market_news] logged %d articles to sheet (skipped %d noise)", logged, skipped_noise)
         return 0  # market_news is sheet+email only, no Telegram alerts
     else:
         # Always log to watchlist sheet regardless of subscribed chats
