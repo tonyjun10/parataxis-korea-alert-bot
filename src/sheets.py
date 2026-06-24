@@ -86,8 +86,18 @@ def _get_gspread_client():
     return _gspread_client
 
 
+def _normalize_title(title: str) -> str:
+    """Normalize a title for dedup comparison — strip whitespace, lowercase, remove punctuation."""
+    import re
+    t = title.strip().lower()
+    t = re.sub(r"\s+", " ", t)           # collapse whitespace
+    t = re.sub(r"[\"'\u201c\u201d\u2018\u2019\[\]\(\)]", "", t)  # strip quotes/brackets
+    return t
+
+
 def _append_watchlist_sync(company: str, entry_type: str, title: str, url: str) -> None:
-    """Blocking append to the watchlist sheet. Run via asyncio.to_thread."""
+    """Blocking append to the watchlist sheet. Run via asyncio.to_thread.
+    Skips the write if an article with the same normalized title already exists in the tab."""
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
@@ -104,6 +114,18 @@ def _append_watchlist_sync(company: str, entry_type: str, title: str, url: str) 
         _gspread_client = None
         client = _get_gspread_client()
         sheet  = client.open_by_key(WATCHLIST_SHEET_ID).worksheet(tab)
+
+    # ── Title-based dedup ──
+    # Read existing titles (column C) and skip if this title already exists.
+    try:
+        existing_titles = sheet.col_values(3)  # column C = Title
+        norm_new = _normalize_title(title)
+        for existing in existing_titles[1:]:   # skip header
+            if _normalize_title(existing) == norm_new:
+                log.info("[sheets] duplicate title skipped (%s): %s", company, title[:50])
+                return
+    except Exception as e:
+        log.warning("[sheets] dedup check failed, appending anyway: %s", e)
 
     ts = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M KST")
     sheet.append_row(
