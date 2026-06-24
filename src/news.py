@@ -34,17 +34,22 @@ COMPANY_QUERIES: dict[str, list[str]] = {
     "microstrategy": ["MicroStrategy", "MSTR bitcoin", "Strategy MicroStrategy"],
     "bitmine":       ["Bitmine Immersion", "BMNR", "Bitmine Ethereum", "비트마인"],
     "market_news":   [
-        # Korean institutional/regulatory news
-        "비트코인 기관", "가상자산 규제", "디지털자산법",
-        "비트코인 ETF", "가상자산 ETF", "코인 입법",
-        "스테이블코인 규제", "가상자산 과세",
-        "비트코인 재무", "메타플래닛 비트코인",
-        # English institutional/market news
+        # Korean — regulation / policy / legislation
+        "가상자산 규제", "디지털자산법", "가상자산 이용자보호법",
+        "스테이블코인 규제", "가상자산 과세", "코인 입법",
+        "디지털자산 기본법", "가상자산 입법", "CBDC",
+        # Korean — institutional / treasury
+        "비트코인 기관투자", "비트코인 보유 기업", "가상자산 보유 기업",
+        "비트코인 재무", "메타플래닛", "가상자산 기관",
+        # Korean — ETF / products
+        "비트코인 ETF", "이더리움 ETF", "가상자산 ETF",
+        # English — institutional / regulatory
         "Bitcoin treasury company", "Bitcoin ETF institutional",
-        "crypto regulation 2026", "stablecoin legislation",
-        "digital asset law Korea", "Bitcoin mining company",
+        "crypto regulation", "stablecoin bill", "stablecoin legislation",
+        "digital asset law", "Bitcoin mining company",
         "MicroStrategy Bitcoin", "Metaplanet Bitcoin",
-        "Ethereum ETF", "crypto tax",
+        "Ethereum ETF", "crypto tax", "SEC crypto",
+        "corporate Bitcoin holdings",
     ],
 }
 
