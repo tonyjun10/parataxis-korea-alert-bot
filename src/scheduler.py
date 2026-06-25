@@ -39,18 +39,18 @@ _DART_COMPANIES = ["parataxis", "parataxiseth", "bitmax", "bitplanet"]
 _NEWS_COMPANIES = ["parataxis", "parataxiseth", "bitmax", "bitplanet", "microstrategy", "bitmine", "market_news"]
 
 # ── Market news noise filter ──────────────────────────────────────────────────
-# Skip price-movement / AI-generated roundup articles that aren't substantive.
-# Applied only to market_news before logging to the sheet.
+# Skip only genuinely low-value content: AI-generated roundups, "how to" guides,
+# and pure market-recap columns. Substantive analysis (전망, 강세, 급감, etc.) is
+# kept — those words appear in real news, and the manual YES review is the final filter.
 _MARKET_NEWS_BLACKLIST = [
-    # Korean price-movement / speculation noise
-    "시세", "급등", "급락", "떡상", "떡락", "폭등", "폭락",
-    "오를까", "내릴까", "전망", "갈까", "찍나", "터치",
-    "마감 시황", "모닝콜", "브리핑", "코인 시황", "오전 시황", "오후 시황",
-    "강세", "약세", "반등", "조정", "매수 기회", "저점", "고점",
-    # English price-movement noise
-    "price prediction", "price analysis", "could hit", "rally",
-    "surges", "plunges", "soars", "crashes", "how to buy",
+    # Korean — AI roundups / recap columns / beginner content
+    "마감 시황", "모닝콜", "코인 시황", "오전 시황", "오후 시황",
+    "시황 브리핑", "마켓 브리핑", "코인 브리핑", "레이더", "데일리 브리핑",
+    "초보", "왕초보", "입문", "하는 법", "투자 가이드",
+    # English — price-prediction clickbait / beginner content
+    "price prediction", "price analysis", "how to buy",
     "how to start", "beginner", "guide to", "what is",
+    "explained", "best crypto to buy",
 ]
 
 
