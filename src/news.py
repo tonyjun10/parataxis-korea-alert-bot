@@ -35,21 +35,26 @@ COMPANY_QUERIES: dict[str, list[str]] = {
     "bitmine":       ["Bitmine Immersion", "BMNR", "Bitmine Ethereum", "비트마인"],
     "market_news":   [
         # Korean — regulation / policy / legislation
-        "가상자산 규제", "디지털자산법", "가상자산 이용자보호법",
-        "스테이블코인 규제", "가상자산 과세", "코인 입법",
-        "디지털자산 기본법", "가상자산 입법", "CBDC",
-        # Korean — institutional / treasury
+        "가상자산 규제", "디지털자산법", "디지털자산기본법",
+        "가상자산 이용자보호법", "스테이블코인 규제", "가상자산 과세",
+        "코인 입법", "가상자산 입법", "CBDC", "클래리티법",
+        "FIU 가상자산", "가상자산사업자",
+        # Korean — institutional / treasury / macro
         "비트코인 기관투자", "비트코인 보유 기업", "가상자산 보유 기업",
-        "비트코인 재무", "메타플래닛", "가상자산 기관",
+        "비트코인 재무", "메타플래닛", "한국은행 가상자산",
+        "비트코인 보안", "양자컴 비트코인",
+        # Korean — companies / ecosystem
+        "스트래티지 비트코인", "마이크로스트래티지",
+        "이더리움 재단", "이더리움 생태계", "비트마인",
+        "솔라나", "리플 XRP", "XRP 규제",
         # Korean — ETF / products
         "비트코인 ETF", "이더리움 ETF", "가상자산 ETF",
         # English — institutional / regulatory
         "Bitcoin treasury company", "Bitcoin ETF institutional",
-        "crypto regulation", "stablecoin bill", "stablecoin legislation",
-        "digital asset law", "Bitcoin mining company",
+        "crypto regulation", "stablecoin bill", "digital asset law",
         "MicroStrategy Bitcoin", "Metaplanet Bitcoin",
-        "Ethereum ETF", "crypto tax", "SEC crypto",
-        "corporate Bitcoin holdings",
+        "Ethereum ETF", "Ethereum Foundation", "SEC crypto",
+        "corporate Bitcoin holdings", "XRP ETF", "Solana institutional",
     ],
 }
 
