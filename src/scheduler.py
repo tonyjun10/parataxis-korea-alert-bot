@@ -244,7 +244,10 @@ async def _check_news(bot: Bot, company: str) -> int:
     log.info("[news/%s] subscribed chats: %d", company, len(chats))
 
     try:
-        items = await get_news(company, limit=10)
+        # market_news pulls a larger batch since it logs all fresh articles;
+        # company feeds only need the top few.
+        fetch_limit = 50 if company == "market_news" else 10
+        items = await get_news(company, limit=fetch_limit)
     except Exception as e:
         log.error("[news/%s] fetch exception: %s", company, e, exc_info=True)
         return 0
