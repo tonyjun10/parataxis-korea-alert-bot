@@ -235,7 +235,8 @@ def _fetch_gdelt_sync(company_key: str, limit: int) -> list[dict]:
 # ── Generic pipeline (bitmax / bitplanet / microstrategy / market_news) ────────
 
 def _get_news_sync(company_key: str, limit: int = 5, max_age_days: int | None = None) -> list[dict]:
-    queries   = COMPANY_QUERIES.get(company_key.lower(), [company_key])
+    key       = company_key.lower()
+    queries   = COMPANY_QUERIES.get(key, [company_key])
     results   = []
     seen_urls: set[str] = set()
 
@@ -243,8 +244,14 @@ def _get_news_sync(company_key: str, limit: int = 5, max_age_days: int | None = 
     if max_age_days is not None:
         cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
 
+    # For market_news we want VOLUME: query every keyword, pull more entries per
+    # query, and don't stop early. For single-company feeds, the old behavior
+    # (stop once we have `limit`) is fine.
+    is_market = (key == "market_news")
+    per_query_fetch = 20 if is_market else limit
+
     for q in queries:
-        for item in _fetch_rss_sync(q, limit):
+        for item in _fetch_rss_sync(q, per_query_fetch):
             url = item.get("url", "")
             if not url or url in seen_urls:
                 continue
@@ -256,19 +263,29 @@ def _get_news_sync(company_key: str, limit: int = 5, max_age_days: int | None = 
                 if dt is None or dt < cutoff:
                     continue
             seen_urls.add(url)
-            results.append(_strip_dt(item))
-        if len(results) >= limit:
+            results.append(item)  # keep _dt for now; we sort then strip below
+        if not is_market and len(results) >= limit:
             break
 
     # GDELT fallback only when we still need more AND no strict age filter
-    # (GDELT seendate is less reliable, so skip it for age-filtered queries)
-    if len(results) < limit and cutoff is None:
+    if len(results) < limit and cutoff is None and not is_market:
         for item in _fetch_gdelt_sync(company_key, limit):
             url = item.get("url", "")
             if url and url not in seen_urls:
                 seen_urls.add(url)
                 results.append(item)
 
+    # Sort newest-first so the freshest articles are kept, then strip _dt
+    def _key(it):
+        dt = it.get("_dt")
+        return dt if dt is not None else datetime.min.replace(tzinfo=timezone.utc)
+    results.sort(key=_key, reverse=True)
+    results = [_strip_dt(it) if "_dt" in it else it for it in results]
+
+    # market_news: return the whole fresh set (capped generously) so the
+    # scheduler can log them all. Other feeds: keep the tight limit.
+    if is_market:
+        return results[:50]
     return results[:limit]
 
 
@@ -316,6 +333,8 @@ async def get_news(company_key: str, limit: int = 5, no_age_limit: bool = False)
         return await asyncio.to_thread(_get_parataxis_news_sync, limit, no_age_limit)
     if key == "parataxiseth":
         return await asyncio.to_thread(_get_parataxiseth_news_sync, limit, no_age_limit)
-    # market_news gets a strict 7-day age filter to avoid stale articles
-    max_age = None if no_age_limit else (7 if key == "market_news" else None)
+    # market_news gets a strict 3-day age filter so only genuinely recent
+    # articles surface (Google News RSS ranks by relevance, not date, so
+    # without this it serves stale-but-relevant articles).
+    max_age = None if no_age_limit else (3 if key == "market_news" else None)
     return await asyncio.to_thread(_get_news_sync, key, limit, max_age)
