@@ -130,7 +130,7 @@ def register_jobs(app: Application, interval_minutes: int = 10):
     app.job_queue.run_daily(
         _email_job,
         time=dt_time(hour=10, minute=5, second=0, tzinfo=SEOUL),
-        days=(0, 1, 2, 3, 4),  # Monday=0 ... Friday=4 (no weekends)
+        days=(1, 2, 3, 4, 5),  # PTB: Sunday=0 ... Saturday=6, so Mon-Fri = 1-5
         name="email_digest",
     )
     log.info("Email digest job registered — 10:05 KST (weekdays only).")
