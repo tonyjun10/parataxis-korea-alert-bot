@@ -59,6 +59,32 @@ def _is_market_noise(title: str) -> bool:
     t = title.lower()
     return any(bad.lower() in t for bad in _MARKET_NEWS_BLACKLIST)
 
+
+# ── Entity concentration cap ──────────────────────────────────────────────────
+# When one story goes viral (e.g. Saylor buys more BTC), every outlet runs its
+# own version. Cap how many articles per hot entity get logged per cycle so the
+# sheet shows variety instead of 11 versions of the same story.
+_MAX_PER_ENTITY = 2
+
+# Each entity = a tuple of synonyms/spellings that all count as the same subject.
+_ENTITY_GROUPS = {
+    "strategy_saylor": ["스트래티지", "마이크로스트래티지", "microstrategy", "strategy", "saylor", "세일러"],
+    "metaplanet":      ["메타플래닛", "metaplanet"],
+    "bitmine":         ["비트마인", "bitmine", "bmnr"],
+    "novogratz":       ["노보그라츠", "novogratz", "갤럭시디지털", "galaxy digital"],
+    "xrp_ripple":      ["리플", "ripple", "xrp"],
+    "solana":          ["솔라나", "solana", "sol "],
+}
+
+
+def _match_entity(title: str) -> str | None:
+    """Return the entity-group key if the title mentions a known hot entity."""
+    t = title.lower()
+    for entity, terms in _ENTITY_GROUPS.items():
+        if any(term.lower() in t for term in terms):
+            return entity
+    return None
+
 _COMPANY_LABEL = {
     "parataxis":     {"en": "Parataxis Korea", "ko": "파라택시스 코리아"},
     "bitmax":        {"en": "Bitmax",          "ko": "비트맥스"},
@@ -289,22 +315,36 @@ async def _check_news(bot: Bot, company: str) -> int:
     best = new_items[0]
 
     # ── Sheet logging ──
-    # For market_news, log ALL new articles (KPR-style volume).
+    # For market_news, log ALL new articles (KPR-style volume) BUT cap how many
+    # cover the same hot entity, so one story (e.g. Saylor/Strategy) doesn't
+    # flood the sheet with 11 near-identical versions.
     # For company news, log only the single best/newest article.
     if company == "market_news":
         logged = 0
         skipped_noise = 0
+        skipped_entity = 0
+        entity_counts: dict[str, int] = {}
         for it in new_items:
             title = it.get("title", "")
             if _is_market_noise(title):
                 skipped_noise += 1
-                db.mark_news_seen(it["url"], company)  # mark seen so it doesn't resurface
+                db.mark_news_seen(it["url"], company)
                 continue
+            # Entity cap: if this title matches a known hot entity and we've
+            # already logged MAX_PER_ENTITY of them this cycle, skip it.
+            matched_entity = _match_entity(title)
+            if matched_entity:
+                if entity_counts.get(matched_entity, 0) >= _MAX_PER_ENTITY:
+                    skipped_entity += 1
+                    db.mark_news_seen(it["url"], company)
+                    continue
+                entity_counts[matched_entity] = entity_counts.get(matched_entity, 0) + 1
             db.mark_news_seen(it["url"], company)
             asyncio.create_task(_sheets.append_watchlist_entry(
                 company, "News", title, it.get("url", "")))
             logged += 1
-        log.info("[news/market_news] logged %d articles to sheet (skipped %d noise)", logged, skipped_noise)
+        log.info("[news/market_news] logged %d to sheet (skipped %d noise, %d entity-cap)",
+                 logged, skipped_noise, skipped_entity)
         return 0  # market_news is sheet+email only, no Telegram alerts
     else:
         # Always log to watchlist sheet regardless of subscribed chats
