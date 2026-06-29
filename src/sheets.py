@@ -116,7 +116,7 @@ def _append_watchlist_sync(company: str, entry_type: str, title: str, url: str) 
         sheet  = client.open_by_key(WATCHLIST_SHEET_ID).worksheet(tab)
 
     # ── Title-based dedup ──
-    # Read existing titles (column C) and skip if this title already exists.
+    # Skip if the exact normalized title already exists in the tab.
     try:
         existing_titles = sheet.col_values(3)  # column C = Title
         norm_new = _normalize_title(title)
