@@ -28,10 +28,14 @@ SEOUL = ZoneInfo("Asia/Seoul")
 # ── Recipients ────────────────────────────────────────────────────────────────
 # Full distribution list (used when EMAIL_TEST_MODE=0)
 ALL_RECIPIENTS = [
-    "tony.jun@parataxis.co.kr",
-    "kyungah.kim@parataxis.co.kr",
-    "david@parataxis.co.kr",
-    "sihyun.kim@parataxis.co.kr",
+    "tony.jun@parataxis.co.kr",         # me
+    "kyungah.kim@parataxis.co.kr",      # CFO
+    "david@parataxis.co.kr",            # DOO
+    "sihyun.kim@parataxis.co.kr",       # DOF
+    "ed@parataxis.io",                  # Chairman
+    "andrew@parataxis.io",              # CEO
+    "michael@parataxiseth.co.kr",       # CEO, Parataxis Ethereum
+    "jason@parataxis.co.kr",            # Marketing consultant
 ]
 
 # ── Fetch news from sheets ────────────────────────────────────────────────────
