@@ -152,6 +152,16 @@ def register_jobs(app: Application, interval_minutes: int = 10):
     )
     log.info("Mining job registered — every %d min.", interval_minutes)
 
+    # Market news — every 30 min (separate from the 10-min monitor to avoid
+    # Google News rate-limiting from too many requests per hour)
+    app.job_queue.run_repeating(
+        _market_news_job,
+        interval=30 * 60,
+        first=90,
+        name="market_news",
+    )
+    log.info("Market news job registered — every 30 min.")
+
     # Email digest — 10:05 KST, weekdays only (Mon-Fri)
     app.job_queue.run_daily(
         _email_job,
@@ -179,6 +189,8 @@ async def _monitor_job(context) -> None:
             await asyncio.sleep(0)  # yield to event loop
 
         for company in _NEWS_COMPANIES:
+            if company == "market_news":
+                continue  # market_news runs on its own 30-min job (see _market_news_job)
             result = await _check_news(bot, company)
             total_alerted += result
             await asyncio.sleep(0)  # yield to event loop
@@ -187,6 +199,20 @@ async def _monitor_job(context) -> None:
         log.exception("Unhandled exception in monitor job")
 
     log.info("MONITOR RUN COMPLETE — total alerts sent: %d", total_alerted)
+
+
+# ── Market news check (separate 30-min cadence) ───────────────────────────────
+
+async def _market_news_job(context) -> None:
+    """Market news runs on its own slower schedule to avoid Google News
+    rate-limiting from too many requests per hour."""
+    bot: Bot = context.bot
+    log.info("── MARKET NEWS JOB START ──")
+    try:
+        await _check_news(bot, "market_news")
+    except Exception:
+        log.exception("Unhandled exception in market news job")
+    log.info("── MARKET NEWS JOB COMPLETE ──")
 
 
 # ── Disclosure check ───────────────────────────────────────────────────────────
