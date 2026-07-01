@@ -244,13 +244,14 @@ def _get_news_sync(company_key: str, limit: int = 5, max_age_days: int | None = 
     if max_age_days is not None:
         cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
 
-    # For market_news we want VOLUME: query every keyword, pull more entries per
-    # query, and don't stop early. For single-company feeds, the old behavior
-    # (stop once we have `limit`) is fine.
+    # For market_news we want VOLUME: query every keyword and don't stop early.
+    # But we throttle requests to avoid Google News rate-limiting (serving empty
+    # feeds), which happens when we hammer it too fast. 12 per query is plenty.
     is_market = (key == "market_news")
     per_query_fetch = 20 if is_market else limit
 
-    for q in queries:
+    import time as _time
+    for i, q in enumerate(queries):
         for item in _fetch_rss_sync(q, per_query_fetch):
             url = item.get("url", "")
             if not url or url in seen_urls:
@@ -266,6 +267,10 @@ def _get_news_sync(company_key: str, limit: int = 5, max_age_days: int | None = 
             results.append(item)  # keep _dt for now; we sort then strip below
         if not is_market and len(results) >= limit:
             break
+        # Throttle: small pause between queries so we don't trip Google News
+        # rate-limiting. Only needed for market_news (many keywords per cycle).
+        if is_market and i < len(queries) - 1:
+            _time.sleep(0.4)
 
     # GDELT fallback only when we still need more AND no strict age filter
     if len(results) < limit and cutoff is None and not is_market:
