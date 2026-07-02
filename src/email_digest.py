@@ -35,6 +35,7 @@ ALL_RECIPIENTS = [
     "ed@parataxis.io",                  # Chairman
     "andrew@parataxis.io",              # CEO
     "michael@parataxiseth.co.kr",       # CEO, Parataxis Ethereum
+    "hchoi@parataxiseth.co.kr",         # Head of Operations, Parataxis Ethereum
     "jason@parataxis.co.kr",            # Marketing consultant
 ]
 
