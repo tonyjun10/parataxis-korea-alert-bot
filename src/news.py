@@ -29,7 +29,7 @@ COMPANY_QUERIES: dict[str, list[str]] = {
         "PARATAXIS KOREA",
     ],
     "bitmax":        ["비트맥스", "Bitmax Korea"],
-    "bitplanet":     ["비트플래닛", "Bitplanet Korea"],
+    "bitplanet":     ["비트플래닛", "비트플래닛 코스닥", "Bitplanet 049470"],
     "parataxiseth":  ["파라택시스이더리움", "파라택시스 이더리움", "Parataxis Ethereum", "신시웨이", "Sinsiway", "290560 KOSDAQ"],
     "microstrategy": ["MicroStrategy", "MSTR bitcoin", "Strategy MicroStrategy"],
     "bitmine":       ["Bitmine Immersion", "BMNR", "Bitmine Ethereum", "비트마인"],
@@ -232,11 +232,20 @@ def _fetch_gdelt_sync(company_key: str, limit: int) -> list[dict]:
         return []
 
 
+# Per-company exclusion terms — drop articles whose title contains these,
+# to filter out keyword collisions (e.g. "bitplanet" fuzzy-matching "metaplanet",
+# the Japanese Bitcoin treasury company, which is unrelated to KOSDAQ Bitplanet).
+COMPANY_EXCLUSIONS = {
+    "bitplanet": ["metaplanet", "메타플래닛"],
+}
+
+
 # ── Generic pipeline (bitmax / bitplanet / microstrategy / market_news) ────────
 
 def _get_news_sync(company_key: str, limit: int = 5, max_age_days: int | None = None) -> list[dict]:
     key       = company_key.lower()
     queries   = COMPANY_QUERIES.get(key, [company_key])
+    exclusions = [e.lower() for e in COMPANY_EXCLUSIONS.get(key, [])]
     results   = []
     seen_urls: set[str] = set()
 
@@ -256,6 +265,12 @@ def _get_news_sync(company_key: str, limit: int = 5, max_age_days: int | None = 
             url = item.get("url", "")
             if not url or url in seen_urls:
                 continue
+            # Exclusion filter: drop articles whose title contains an excluded
+            # term (keyword-collision guard, e.g. metaplanet vs bitplanet).
+            if exclusions:
+                title_lower = item.get("title", "").lower()
+                if any(ex in title_lower for ex in exclusions):
+                    continue
             # Age filter: drop items older than cutoff.
             # Items with an unparseable date (_dt is None) are dropped when a
             # cutoff is set, since we can't verify they're recent.
