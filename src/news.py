@@ -182,6 +182,14 @@ _RESOLVE_HEADERS = {
     "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
 }
 
+# Without a consent cookie, Google redirects server-side clients to
+# consent.google.com instead of serving the article, which breaks resolution.
+# These are the standard "consent already given" cookies.
+_RESOLVE_COOKIES = {
+    "CONSENT": "YES+cb.20220301-11-p0.en+FX+678",
+    "SOCS": "CAESHAgBEhIaAB",
+}
+
 # Google-owned hosts that are never a valid final destination
 _GOOGLE_HOSTS = ("news.google.com", "accounts.google.com", "policies.google.com",
                  "support.google.com", "consent.google.com")
@@ -251,13 +259,21 @@ def resolve_google_news_url_sync(url: str, timeout: float = 10.0) -> str:
 
     try:
         with httpx.Client(follow_redirects=True, timeout=timeout,
-                          headers=_RESOLVE_HEADERS) as client:
+                          headers=_RESOLVE_HEADERS,
+                          cookies=_RESOLVE_COOKIES) as client:
             r = client.get(url)
 
             # 1) Redirects landed us on the publisher already — best case.
             final = str(r.url)
             if final.startswith("http") and not _is_google_url(final):
                 return final
+
+            # Still stuck behind Google's consent wall — the cookies above
+            # didn't take. Flag it loudly; nothing below can succeed.
+            if "consent.google.com" in final:
+                log.warning("[resolve] BLOCKED by consent wall (cookies rejected): %s",
+                            url[:70])
+                return url
 
             body = r.text
 
