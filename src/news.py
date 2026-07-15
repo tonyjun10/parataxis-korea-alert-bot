@@ -191,6 +191,52 @@ def _is_google_url(u: str) -> bool:
     return any(h in u for h in _GOOGLE_HOSTS)
 
 
+def _decode_via_batchexecute(client, url: str, body: str) -> str | None:
+    """
+    Resolve the NEW Google News link format (tokens starting AU_yqL...), where
+    the publisher URL is NOT embedded in the base64 and the article page is a JS
+    shell. Google's own front-end fetches the destination from a batchexecute
+    endpoint using a signature + timestamp embedded in the page; we do the same.
+
+    Returns the publisher URL, or None if anything doesn't line up.
+    NOTE: this depends on Google's internal endpoint and can break without notice.
+    It is wrapped by the caller so failure just falls back to the original link.
+    """
+    import re as _re
+    import json as _json
+    import urllib.parse as _up
+
+    sg = _re.search(r'data-n-a-sg="([^"]+)"', body)
+    ts = _re.search(r'data-n-a-ts="([^"]+)"', body)
+    if not (sg and ts):
+        return None
+
+    # Article token sits between /articles/ and the query string.
+    m = _re.search(r"/articles/([^?/]+)", url)
+    if not m:
+        return None
+    art_id = m.group(1)
+
+    inner = _json.dumps([
+        "garturlreq",
+        [["X", "X", ["X", "X"], None, None, 1, 1, "US:en", None, 1,
+          None, None, None, None, None, 0, 1],
+         "X", "X", 1, [1, 1, 1], 1, 1, None, 0, 0, None, 0],
+        art_id, int(ts.group(1)), sg.group(1),
+    ])
+    payload = _json.dumps([[["Fbv4je", inner, None, "generic"]]])
+
+    r = client.post(
+        "https://news.google.com/_/DotsSplashUi/data/batchexecute",
+        content="f.req=" + _up.quote(payload),
+        headers={"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+    )
+    # Response is Google's ")]}'"-prefixed chunked format and the destination
+    # sits inside ESCAPED json (\"https://...\"), so allow backslash-quotes.
+    m = _re.search(r'\\?"(https?://(?!news\.google\.com)[^"\\]+)\\?"', r.text)
+    return m.group(1) if m else None
+
+
 def resolve_google_news_url_sync(url: str, timeout: float = 10.0) -> str:
     """
     Resolve a Google News redirect URL to the publisher's direct article URL.
@@ -208,41 +254,55 @@ def resolve_google_news_url_sync(url: str, timeout: float = 10.0) -> str:
                           headers=_RESOLVE_HEADERS) as client:
             r = client.get(url)
 
-        # 1) Redirects landed us on the publisher already — best case.
-        final = str(r.url)
-        if final.startswith("http") and not _is_google_url(final):
-            return final
+            # 1) Redirects landed us on the publisher already — best case.
+            final = str(r.url)
+            if final.startswith("http") and not _is_google_url(final):
+                return final
 
-        body = r.text
+            body = r.text
 
-        # 2) Google News interstitials carry the destination in data-n-au.
+            # 2) New opaque format (AU_yqL...): ask Google's own endpoint.
+            try:
+                got = _decode_via_batchexecute(client, url, body)
+                if got:
+                    return got
+            except Exception as exc:
+                log.warning("[resolve] batchexecute failed: %s: %s",
+                            type(exc).__name__, exc)
+
+        # 3) Older interstitials carry the destination in data-n-au.
         m = _re.search(r'data-n-au="(https?://[^"]+)"', body)
         if m:
             return _html.unescape(m.group(1))
 
-        # 3) <meta http-equiv="refresh" content="0; url=...">
+        # 4) <meta http-equiv="refresh" content="0; url=...">
         m = _re.search(
             r'<meta[^>]+http-equiv=["\']?refresh["\']?[^>]*content=["\'][^;]*;\s*url=(https?://[^"\'>\s]+)',
             body, _re.I)
         if m:
             return _html.unescape(m.group(1))
 
-        # 4) JS redirect (location.replace / location.href)
+        # 5) JS redirect (location.replace / location.href)
         m = _re.search(
             r'location\.(?:replace\(|href\s*=\s*)["\'](https?://[^"\']+)["\']', body)
         if m and not _is_google_url(m.group(1)):
             return _html.unescape(m.group(1))
 
-        # 5) First non-Google anchor on the page.
+        # 6) First non-Google anchor on the page.
         for m in _re.finditer(r'<a[^>]+href="(https?://[^"]+)"', body):
             candidate = _html.unescape(m.group(1))
             if not _is_google_url(candidate):
                 return candidate
 
-        log.debug("[resolve] could not extract publisher URL from %s", url[:70])
+        # Nothing worked — log enough detail to diagnose (visible at INFO level).
+        log.warning(
+            "[resolve] no publisher URL found. final=%s status=%s len=%d snippet=%r",
+            final[:120], r.status_code, len(body), body[:200].replace("\n", " ")
+        )
 
     except Exception as exc:
-        log.debug("[resolve] failed for %s: %s", url[:70], exc)
+        log.warning("[resolve] EXCEPTION for %s -> %s: %s",
+                    url[:60], type(exc).__name__, exc)
 
     return url  # fall back to the original Google link
 
