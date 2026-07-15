@@ -167,6 +167,100 @@ def _strip_dt(item: dict) -> dict:
     return {k: v for k, v in item.items() if k != "_dt"}
 
 
+# ── Google News URL resolution ────────────────────────────────────────────────
+# Google News RSS gives redirect links (news.google.com/rss/articles/CBMi...)
+# rather than the publisher's real URL. Those resolve differently depending on
+# the viewer's Google session / region / consent state, so recipients without a
+# matching session hit a Google consent or error page instead of the article.
+# Resolving to the publisher URL before we store/send fixes this for everyone.
+
+_RESOLVE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+}
+
+# Google-owned hosts that are never a valid final destination
+_GOOGLE_HOSTS = ("news.google.com", "accounts.google.com", "policies.google.com",
+                 "support.google.com", "consent.google.com")
+
+
+def _is_google_url(u: str) -> bool:
+    return any(h in u for h in _GOOGLE_HOSTS)
+
+
+def resolve_google_news_url_sync(url: str, timeout: float = 10.0) -> str:
+    """
+    Resolve a Google News redirect URL to the publisher's direct article URL.
+    Returns the ORIGINAL url unchanged if resolution fails, so this can never
+    make things worse than not resolving at all.
+    """
+    import re as _re
+    import html as _html
+
+    if not url or "news.google.com" not in url:
+        return url  # already a direct publisher link
+
+    try:
+        with httpx.Client(follow_redirects=True, timeout=timeout,
+                          headers=_RESOLVE_HEADERS) as client:
+            r = client.get(url)
+
+        # 1) Redirects landed us on the publisher already — best case.
+        final = str(r.url)
+        if final.startswith("http") and not _is_google_url(final):
+            return final
+
+        body = r.text
+
+        # 2) Google News interstitials carry the destination in data-n-au.
+        m = _re.search(r'data-n-au="(https?://[^"]+)"', body)
+        if m:
+            return _html.unescape(m.group(1))
+
+        # 3) <meta http-equiv="refresh" content="0; url=...">
+        m = _re.search(
+            r'<meta[^>]+http-equiv=["\']?refresh["\']?[^>]*content=["\'][^;]*;\s*url=(https?://[^"\'>\s]+)',
+            body, _re.I)
+        if m:
+            return _html.unescape(m.group(1))
+
+        # 4) JS redirect (location.replace / location.href)
+        m = _re.search(
+            r'location\.(?:replace\(|href\s*=\s*)["\'](https?://[^"\']+)["\']', body)
+        if m and not _is_google_url(m.group(1)):
+            return _html.unescape(m.group(1))
+
+        # 5) First non-Google anchor on the page.
+        for m in _re.finditer(r'<a[^>]+href="(https?://[^"]+)"', body):
+            candidate = _html.unescape(m.group(1))
+            if not _is_google_url(candidate):
+                return candidate
+
+        log.debug("[resolve] could not extract publisher URL from %s", url[:70])
+
+    except Exception as exc:
+        log.debug("[resolve] failed for %s: %s", url[:70], exc)
+
+    return url  # fall back to the original Google link
+
+
+async def resolve_news_urls(urls: list[str], concurrency: int = 5) -> list[str]:
+    """
+    Resolve many Google News URLs in parallel (bounded concurrency).
+    Order is preserved. Failures fall back to the original URL.
+    """
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _one(u: str) -> str:
+        async with sem:
+            return await asyncio.to_thread(resolve_google_news_url_sync, u)
+
+    return await asyncio.gather(*[_one(u) for u in urls])
+
+
 # ── Parataxis Korea pipeline ───────────────────────────────────────────────────
 
 def _get_parataxis_news_sync(limit: int, no_age_limit: bool = False) -> list[dict]:
