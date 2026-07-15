@@ -22,7 +22,7 @@ from telegram.ext import Application
 import db
 from dart import get_disclosures
 from formatter import fmt_disclosures, fmt_news
-from news import get_news
+from news import get_news, resolve_news_urls
 from brief import BriefError, take_screenshot_with_timeout
 from luxor import LuxorError, fmt_mining_stats, get_mining_stats
 import sheets as _sheets
@@ -345,8 +345,12 @@ async def _check_news(bot: Bot, company: str) -> int:
     # cover the same hot entity, so one story (e.g. Saylor/Strategy) doesn't
     # flood the sheet with 11 near-identical versions.
     # For company news, log only the single best/newest article.
+    #
+    # NOTE: dedup (db.is_new_news / mark_news_seen) always uses the ORIGINAL
+    # Google News URL. Only the sheet/alert output gets the resolved publisher
+    # URL, so dedup stays consistent across cycles.
     if company == "market_news":
-        logged = 0
+        to_log = []
         skipped_noise = 0
         skipped_entity = 0
         entity_counts: dict[str, int] = {}
@@ -366,16 +370,30 @@ async def _check_news(bot: Bot, company: str) -> int:
                     continue
                 entity_counts[matched_entity] = entity_counts.get(matched_entity, 0) + 1
             db.mark_news_seen(it["url"], company)
+            to_log.append(it)
+
+        # Resolve Google News redirect links → real publisher URLs, in parallel.
+        # Without this, recipients without a matching Google session hit a
+        # consent/error page instead of the article.
+        resolved_urls = await resolve_news_urls([it.get("url", "") for it in to_log])
+        n_resolved = sum(
+            1 for it, ru in zip(to_log, resolved_urls) if ru != it.get("url", "")
+        )
+        for it, real_url in zip(to_log, resolved_urls):
             asyncio.create_task(_sheets.append_watchlist_entry(
-                company, "News", title, it.get("url", "")))
-            logged += 1
-        log.info("[news/market_news] logged %d to sheet (skipped %d noise, %d entity-cap)",
-                 logged, skipped_noise, skipped_entity)
+                company, "News", it.get("title", ""), real_url))
+
+        log.info("[news/market_news] logged %d to sheet (skipped %d noise, %d entity-cap; %d/%d urls resolved)",
+                 len(to_log), skipped_noise, skipped_entity, n_resolved, len(to_log))
         return 0  # market_news is sheet+email only, no Telegram alerts
     else:
+        # Resolve the Google News link to the publisher URL so the sheet and the
+        # Telegram alert both point at the real article.
+        best_url = (await resolve_news_urls([best.get("url", "")]))[0]
+        best["url"] = best_url
         # Always log to watchlist sheet regardless of subscribed chats
         asyncio.create_task(_sheets.append_watchlist_entry(
-            company, "News", best.get("title", ""), best.get("url", "")))
+            company, "News", best.get("title", ""), best_url))
 
     if not chats:
         return 0
